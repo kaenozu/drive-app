@@ -448,6 +448,7 @@ type RouteRequest struct {
 	ReturnTime        string  `json:"return_time"`        // "HH:MM" optional
 	IncludeRestaurant bool    `json:"include_restaurant"`
 	IncludeRest       bool    `json:"include_rest"`
+	AvoidUrban        bool    `json:"avoid_urban"`
 }
 
 // RouteStop represents a stop in the route
@@ -686,6 +687,18 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 		avoidList = "\n※最近提案したルートと同じ組み合わせは避けてください。\n"
 	}
 
+	// Urban avoidance preference
+	var urbanPref string
+	if req.AvoidUrban {
+		urbanPref = `
+【重要】都市部を避けるモード:
+- 郊外・山間部・海岸沿いなど自然豊かなエリアを優先
+- 市街地・繁華街・交通量の多いエリアは避ける
+- 景色の良いワインディングロードや山道を優先
+- 現在地から離れた郊外のスポットを選ぶ
+`
+	}
+
 	// Calculate recommended number of stops based on available time
 	numDriveSpots := 1
 	includeMeal := false
@@ -710,7 +723,7 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 出発時刻: %s
 使える時間: 約%.1f時間
 ランダムシード: %d
-%s
+%s%s
 【候補スポット】
 %s
 【重要な要件】
@@ -731,7 +744,7 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
   "stay_durations": [各スポットの滞在時間（分）],
   "message": "このルートの見どころを2文で"
 }
-`, startLat, startLng, req.DepartureTime, availableHours, randomSeed, avoidList, candidateList,
+`, startLat, startLng, req.DepartureTime, availableHours, randomSeed, avoidList, urbanPref, candidateList,
 		numDriveSpots,
 		map[bool]string{true: "1箇所必ず含める", false: "含めない（候補なし）"}[includeMeal],
 		map[bool]string{true: "1箇所含める", false: "含めない（候補なし）"}[includeRest])

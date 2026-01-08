@@ -186,6 +186,7 @@ async function generateRoute() {
     const returnTime = document.getElementById('return-time').value;
     const includeRestaurant = document.getElementById('include-restaurant').checked;
     const includeRest = document.getElementById('include-rest').checked;
+    const avoidUrban = document.getElementById('avoid-urban').checked;
     
     try {
         const response = await fetch('/api/route', {
@@ -197,7 +198,8 @@ async function generateRoute() {
                 departure_time: departure,
                 return_time: returnTime || null,
                 include_restaurant: includeRestaurant,
-                include_rest: includeRest
+                include_rest: includeRest,
+                avoid_urban: avoidUrban
             })
         });
         
