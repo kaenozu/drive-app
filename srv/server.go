@@ -644,11 +644,12 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 			break
 		}
 		dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
+		dir := getDirection(startLat, startLng, spot.Latitude, spot.Longitude)
 		desc := ""
 		if spot.Description != nil {
 			desc = *spot.Description
 		}
-		candidateList += fmt.Sprintf("  [ID:%d] %s (%.1fkm) - %s\n", spot.ID, spot.Name, dist, desc)
+		candidateList += fmt.Sprintf("  [ID:%d] %s (%.1fkm, %s) - %s\n", spot.ID, spot.Name, dist, dir, desc)
 	}
 
 	if len(restaurants) > 0 {
@@ -658,11 +659,12 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 				break
 			}
 			dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
+			dir := getDirection(startLat, startLng, spot.Latitude, spot.Longitude)
 			desc := ""
 			if spot.Description != nil {
 				desc = *spot.Description
 			}
-			candidateList += fmt.Sprintf("  [ID:%d] %s (%.1fkm) - %s\n", spot.ID, spot.Name, dist, desc)
+			candidateList += fmt.Sprintf("  [ID:%d] %s (%.1fkm, %s) - %s\n", spot.ID, spot.Name, dist, dir, desc)
 		}
 	}
 
@@ -673,11 +675,12 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 				break
 			}
 			dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
+			dir := getDirection(startLat, startLng, spot.Latitude, spot.Longitude)
 			desc := ""
 			if spot.Description != nil {
 				desc = *spot.Description
 			}
-			candidateList += fmt.Sprintf("  [ID:%d] %s (%.1fkm) - %s\n", spot.ID, spot.Name, dist, desc)
+			candidateList += fmt.Sprintf("  [ID:%d] %s (%.1fkm, %s) - %s\n", spot.ID, spot.Name, dist, dir, desc)
 		}
 	}
 
@@ -715,6 +718,18 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 		numDriveSpots = 3
 	}
 
+	// Calculate return time constraint
+	returnConstraint := ""
+	if req.ReturnTime != "" {
+		returnConstraint = fmt.Sprintf(`
+【時間制約 - 最重要】
+**%sまでに必ず帰着すること！**
+- 移動時間は平址2分/kmで計算
+- 全スポットの滞在時間と移動時間の合計が%.1f時間以内に収まるように
+- 帰着時間を超えるルートは絶対にNG
+`, req.ReturnTime, availableHours)
+	}
+
 	prompt := fmt.Sprintf(`あなたはドライブルートのプランナーAIです。
 現在地から出発して、複数のスポットを経由して現在地に戻る充実した周遊ドライブルートを作成してください。
 
@@ -723,31 +738,27 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 出発時刻: %s
 使える時間: 約%.1f時間
 ランダムシード: %d
-%s%s
+%s%s%s
 【候補スポット】
 %s
 【重要な要件】
-1. ドライブスポットを **%d箇所以上** 必ず選ぶ（メインの目的地）
-2. 食事スポットを **%s** （昼食時間帯11:30-13:30頃に配置）
-3. 休憩・カフェスポットを **%s**
-4. 効率的なルート順序にする（周回ルート、無駄な往復をしない）
-5. 出発地と帰着地は同じ（現在地）
-6. 各スポットの滞在時間目安:
-   - ドライブスポット: 30-45分
-   - 食事: 50-60分
-   - 休憩/カフェ: 20-30分
-7. **必ず複数スポットを含む充実したルートにすること**
+1. **同じ方角のスポットを選ぶ**: 北、南、東、西のいずれか一方向にまとめる。方角がバラバラなルートは絶対にNG
+2. **周回ルート**: 出発→遠くのスポット→近くのスポット→帰着、のように流れるようなルート
+3. ドライブスポットを **%d箇所以上** 選ぶ
+4. 食事スポットを **%s**
+5. 休憩・カフェスポットを **%s**
+6. 各スポットの滞在時間: ドライブ30-40分、食事45-50分、休憩15-20分
 
 【出力形式】JSON形式で回答:
 {
-  "route_ids": [訪問順のスポットID配列。3箇所以上を推奨],
+  "route_ids": [訪問順のスポットID配列],
   "stay_durations": [各スポットの滞在時間（分）],
   "message": "このルートの見どころを2文で"
 }
-`, startLat, startLng, req.DepartureTime, availableHours, randomSeed, avoidList, urbanPref, candidateList,
+`, startLat, startLng, req.DepartureTime, availableHours, randomSeed, returnConstraint, avoidList, urbanPref, candidateList,
 		numDriveSpots,
-		map[bool]string{true: "1箇所必ず含める", false: "含めない（候補なし）"}[includeMeal],
-		map[bool]string{true: "1箇所含める", false: "含めない（候補なし）"}[includeRest])
+		map[bool]string{true: "1箇所含める", false: "含めない"}[includeMeal],
+		map[bool]string{true: "1箇所含める", false: "含めない"}[includeRest])
 
 	// Call Claude API
 	routeIDs, stayDurations, message := callClaudeAPIForRouteV2(prompt)
@@ -954,6 +965,37 @@ func callClaudeAPIForRouteV2(prompt string) ([]int64, []int, string) {
 	}
 
 	return aiResp.RouteIDs, aiResp.StayDurations, aiResp.Message
+}
+
+// getDirection returns the direction from point 1 to point 2
+func getDirection(lat1, lon1, lat2, lon2 float64) string {
+	dLat := lat2 - lat1
+	dLon := lon2 - lon1
+	
+	// Calculate angle
+	angle := math.Atan2(dLon, dLat) * 180 / math.Pi
+	if angle < 0 {
+		angle += 360
+	}
+	
+	// Convert to direction
+	if angle >= 337.5 || angle < 22.5 {
+		return "北"
+	} else if angle >= 22.5 && angle < 67.5 {
+		return "北東"
+	} else if angle >= 67.5 && angle < 112.5 {
+		return "東"
+	} else if angle >= 112.5 && angle < 157.5 {
+		return "南東"
+	} else if angle >= 157.5 && angle < 202.5 {
+		return "南"
+	} else if angle >= 202.5 && angle < 247.5 {
+		return "南西"
+	} else if angle >= 247.5 && angle < 292.5 {
+		return "西"
+	} else {
+		return "北西"
+	}
 }
 
 // Haversine formula for distance calculation
