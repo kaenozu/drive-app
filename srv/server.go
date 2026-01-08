@@ -747,9 +747,10 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 1. **同じ方角のスポットを選ぶ**: 北、南、東、西のいずれか一方向にまとめる。方角がバラバラなルートは絶対にNG
 2. **周回ルート**: 出発→遠くのスポット→近くのスポット→帰着、のように流れるようなルート
 3. ドライブスポットを **%d箇所以上** 選ぶ
-4. 食事スポットを **%s**
-5. 休憩・カフェスポットを **%s**
+4. 食事スポットを **%s** （**食事は必ず1箇所のみ、絶対に2箇所以上連続させない**）
+5. 休憩・カフェスポットを **%s** （**休憩も最大1箇所**）
 6. 各スポットの滞在時間: ドライブ30-40分、食事45-50分、休憩15-20分
+7. **同じカテゴリのスポットを連続させない**（食事→食事、休憩→休憩はNG）
 
 【出力形式】JSON形式で回答:
 {
@@ -768,6 +769,21 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 
 	// Build spot map
 	spotMap := make(map[int64]dbgen.Spot)
+	for _, sp := range driveSpots {
+		spotMap[sp.ID] = sp
+	}
+	for _, sp := range restaurants {
+		spotMap[sp.ID] = sp
+	}
+	for _, sp := range restSpots {
+		spotMap[sp.ID] = sp
+	}
+
+	// Validate and fix route: remove consecutive same-category spots (especially restaurant/rest)
+	routeIDs = validateRouteCategories(routeIDs, stayDurations, spotMap)
+
+	// Rebuild spot map (already done above, just for clarity)
+	spotMap = make(map[int64]dbgen.Spot)
 	for _, sp := range driveSpots {
 		spotMap[sp.ID] = sp
 	}
@@ -967,6 +983,54 @@ func callClaudeAPIForRouteV2(prompt string) ([]int64, []int, string) {
 	}
 
 	return aiResp.RouteIDs, aiResp.StayDurations, aiResp.Message
+}
+
+// validateRouteCategories removes consecutive same-category spots (restaurant/rest)
+func validateRouteCategories(routeIDs []int64, stayDurations []int, spotMap map[int64]dbgen.Spot) []int64 {
+	if len(routeIDs) == 0 {
+		return routeIDs
+	}
+
+	var validIDs []int64
+	var lastCategory string
+	restaurantCount := 0
+	restCount := 0
+
+	for _, id := range routeIDs {
+		spot, ok := spotMap[id]
+		if !ok {
+			continue
+		}
+
+		// Skip consecutive same category (except drive)
+		if spot.Category == lastCategory && (spot.Category == "restaurant" || spot.Category == "rest") {
+			slog.Info("Removing consecutive same-category spot", "id", id, "category", spot.Category)
+			continue
+		}
+
+		// Limit restaurant to 1
+		if spot.Category == "restaurant" {
+			if restaurantCount >= 1 {
+				slog.Info("Removing extra restaurant", "id", id)
+				continue
+			}
+			restaurantCount++
+		}
+
+		// Limit rest to 1
+		if spot.Category == "rest" {
+			if restCount >= 1 {
+				slog.Info("Removing extra rest spot", "id", id)
+				continue
+			}
+			restCount++
+		}
+
+		validIDs = append(validIDs, id)
+		lastCategory = spot.Category
+	}
+
+	return validIDs
 }
 
 // getDirection returns the direction from point 1 to point 2
