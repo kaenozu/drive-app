@@ -21,6 +21,14 @@ type Migration struct {
 	ExecutedAt      time.Time `json:"executed_at"`
 }
 
+type RecommendationHistory struct {
+	ID            int64     `json:"id"`
+	UserID        string    `json:"user_id"`
+	SpotID        int64     `json:"spot_id"`
+	RecommendedAt time.Time `json:"recommended_at"`
+	WasAccepted   *bool     `json:"was_accepted"`
+}
+
 type Spot struct {
 	ID          int64     `json:"id"`
 	Name        string    `json:"name"`
@@ -33,6 +41,31 @@ type Spot struct {
 	Rating      *float64  `json:"rating"`
 	CreatedAt   time.Time `json:"created_at"`
 	CreatedBy   *string   `json:"created_by"`
+}
+
+type User struct {
+	ID        string    `json:"id"`
+	CreatedAt time.Time `json:"created_at"`
+	LastSeen  time.Time `json:"last_seen"`
+}
+
+type UserPreference struct {
+	ID                  int64     `json:"id"`
+	UserID              string    `json:"user_id"`
+	PreferredCategories *string   `json:"preferred_categories"`
+	PreferredDistanceKm *float64  `json:"preferred_distance_km"`
+	PreferredTimeHours  *float64  `json:"preferred_time_hours"`
+	AvoidCategories     *string   `json:"avoid_categories"`
+	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+type VisitHistory struct {
+	ID        int64     `json:"id"`
+	UserID    string    `json:"user_id"`
+	SpotID    int64     `json:"spot_id"`
+	VisitedAt time.Time `json:"visited_at"`
+	Rating    *int64    `json:"rating"`
+	Comment   *string   `json:"comment"`
 }
 
 type Visitor struct {

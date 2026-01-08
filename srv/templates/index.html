@@ -8,65 +8,111 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="app-container">
-        <header class="app-header">
-            <h1>🚗 ドライブスポットファインダー</h1>
-            <p>現在地から素敵なドライブスポットを見つけよう</p>
-        </header>
+    <header>
+        <h1>🚗 ドライブスポットファインダー</h1>
+        <p>AIがあなたにぴったりのドライブスポットを提案します</p>
+    </header>
 
-        <div class="main-content">
-            <div class="map-container">
+    <main>
+        <div class="container">
+            <!-- Location Section -->
+            <section class="card location-card">
+                <h2>📍 現在地</h2>
+                <div id="location-status" class="status">位置情報を取得中...</div>
+                <div id="location-display" class="location-display" style="display:none;">
+                    <span id="location-text"></span>
+                </div>
+                <button id="get-location-btn" class="btn btn-secondary">
+                    🔄 位置を再取得
+                </button>
+            </section>
+
+            <!-- Preference Section -->
+            <section class="card preference-card">
+                <h2>⚙️ 条件設定</h2>
+                <div class="form-group">
+                    <label for="max-distance">最大距離（片道）</label>
+                    <select id="max-distance">
+                        <option value="30">30km</option>
+                        <option value="50" selected>50km</option>
+                        <option value="100">100km</option>
+                        <option value="150">150km</option>
+                        <option value="200">200km</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="max-time">最大所要時間（片道）</label>
+                    <select id="max-time">
+                        <option value="1">1時間</option>
+                        <option value="2" selected>2時間</option>
+                        <option value="3">3時間</option>
+                        <option value="4">4時間以上</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="category-filter">カテゴリ</label>
+                    <select id="category-filter">
+                        <option value="">すべて</option>
+                        <option value="drive">🛣️ ドライブスポット</option>
+                        <option value="restaurant">🍽️ 食事</option>
+                        <option value="rest">☕ 休憩</option>
+                    </select>
+                </div>
+            </section>
+
+            <!-- Recommend Button -->
+            <button id="recommend-btn" class="btn btn-primary btn-large" disabled>
+                🤖 AIにおすすめを聞く
+            </button>
+
+            <!-- AI Message -->
+            <div id="ai-message" class="ai-message" style="display:none;"></div>
+
+            <!-- User Stats -->
+            <div id="user-stats" class="user-stats" style="display:none;"></div>
+
+            <!-- Recommendations -->
+            <section id="recommendations" class="recommendations" style="display:none;">
+                <h2>🎯 おすすめスポット</h2>
+                <div id="spots-container"></div>
+            </section>
+
+            <!-- Map -->
+            <section class="card map-card">
+                <h2>🗺️ 地図</h2>
                 <div id="map"></div>
+            </section>
+
+            <!-- History -->
+            <section id="history-section" class="card history-card" style="display:none;">
+                <h2>📝 訪問履歴</h2>
+                <div id="history-container"></div>
+            </section>
+        </div>
+    </main>
+
+    <!-- Feedback Modal -->
+    <div id="feedback-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <h3>📝 訪問レビュー</h3>
+            <p id="feedback-spot-name"></p>
+            <div class="rating-input">
+                <label>評価:</label>
+                <div class="stars" id="rating-stars">
+                    <span data-rating="1">⭐</span>
+                    <span data-rating="2">⭐</span>
+                    <span data-rating="3">⭐</span>
+                    <span data-rating="4">⭐</span>
+                    <span data-rating="5">⭐</span>
+                </div>
             </div>
-
-            <div class="sidebar">
-                <div class="location-info">
-                    <h2>📍 現在地</h2>
-                    <p id="current-location">位置情報を取得中...</p>
-                    <button id="refresh-location" class="btn btn-primary">
-                        🔄 位置を取得
-                    </button>
-                    <input type="hidden" id="manual-lat" value="35.6762">
-                    <input type="hidden" id="manual-lng" value="139.6503">
-                    <p class="location-hint">地図をクリックして位置を設定できます</p>
-                </div>
-
-                <div class="search-section">
-                    <h2>🔍 スポット自動収集</h2>
-                    <div class="search-options">
-                        <label>検索範囲:</label>
-                        <select id="search-radius">
-                            <option value="5000">5 km</option>
-                            <option value="10000">10 km</option>
-                            <option value="20000" selected>20 km</option>
-                            <option value="30000">30 km</option>
-                            <option value="50000">50 km</option>
-                            <option value="75000">75 km</option>
-                            <option value="100000">100 km</option>
-                        </select>
-                    </div>
-                    <button id="search-spots-btn" class="btn btn-success">
-                        🔍 周辺スポットを自動収集
-                    </button>
-                    <p class="search-hint">展望台・観光地・飲食店・休憩所等を自動で収集します</p>
-                </div>
-
-                <div class="category-filter">
-                    <h2>🏷️ カテゴリ</h2>
-                    <div class="filter-buttons">
-                        <button class="filter-btn active" data-category="all">すべて</button>
-                        <button class="filter-btn" data-category="drive">🛣️ ドライブ</button>
-                        <button class="filter-btn" data-category="restaurant">🍽️ 食事</button>
-                        <button class="filter-btn" data-category="rest">☕ 休憩</button>
-                    </div>
-                </div>
-
-                <div class="spots-list">
-                    <h2>📌 スポット一覧</h2>
-                    <div id="spots-container">
-                        <p class="loading">スポットを読み込み中...</p>
-                    </div>
-                </div>
+            <div class="form-group">
+                <label for="feedback-comment">コメント（任意）</label>
+                <textarea id="feedback-comment" rows="3" placeholder="感想を書いてください..."></textarea>
+            </div>
+            <div class="modal-buttons">
+                <button id="submit-feedback" class="btn btn-primary">送信</button>
+                <button id="cancel-feedback" class="btn btn-secondary">キャンセル</button>
             </div>
         </div>
     </div>

@@ -3,11 +3,10 @@ let map;
 let currentLocation = null;
 let currentLocationMarker = null;
 let spotMarkers = [];
-let spots = [];
-let activeFilter = 'all';
-let isSearching = false;
+let currentRecommendations = [];
+let selectedRating = 0;
+let feedbackSpotId = null;
 
-// Category icons
 const categoryIcons = {
     drive: '🛣️',
     restaurant: '🍽️',
@@ -20,121 +19,81 @@ const categoryLabels = {
     rest: '休憩'
 };
 
-// Initialize the app
+// Initialize
 document.addEventListener('DOMContentLoaded', () => {
     initMap();
     getCurrentLocation();
-    loadSpots();
     setupEventListeners();
+    loadHistory();
 });
 
-// Initialize Leaflet map
 function initMap() {
-    // Default to Tokyo
     map = L.map('map').setView([35.6762, 139.6503], 10);
-    
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
-
-    // Click handler for setting location
-    map.on('click', (e) => {
-        setCurrentLocation(e.latlng.lat, e.latlng.lng);
-        showNotification('位置を設定しました');
-    });
 }
 
-// Get current location
 function getCurrentLocation() {
-    const locationEl = document.getElementById('current-location');
-    locationEl.textContent = '位置情報を取得中...';
+    const statusEl = document.getElementById('location-status');
+    statusEl.textContent = '位置情報を取得中...';
+    statusEl.className = 'status';
 
-    // Try browser geolocation first
     if (navigator.geolocation) {
         navigator.geolocation.getCurrentPosition(
             (position) => {
-                setCurrentLocation(position.coords.latitude, position.coords.longitude);
-                showNotification('位置情報を取得しました');
+                setLocation(position.coords.latitude, position.coords.longitude, 'GPS');
             },
             (error) => {
                 console.error('Geolocation error:', error);
-                // Fallback to IP-based geolocation
                 getLocationByIP();
             },
-            {
-                enableHighAccuracy: true,
-                timeout: 10000,
-                maximumAge: 60000
-            }
+            { enableHighAccuracy: true, timeout: 10000, maximumAge: 60000 }
         );
     } else {
-        // Fallback to IP-based geolocation
         getLocationByIP();
     }
 }
 
-// Fallback: Get location by IP address
 async function getLocationByIP() {
-    const locationEl = document.getElementById('current-location');
-    locationEl.textContent = 'IPアドレスから位置を推定中...';
-    
+    const statusEl = document.getElementById('location-status');
+    statusEl.textContent = 'IPアドレスから位置を推定中...';
+
     try {
-        // Try multiple IP geolocation services
-        let data = null;
-        
-        // Try ipapi.co first (no API key needed, 1000 requests/day)
-        try {
-            const response = await fetch('https://ipapi.co/json/', { timeout: 5000 });
-            if (response.ok) {
-                data = await response.json();
-                if (data.latitude && data.longitude) {
-                    setCurrentLocation(data.latitude, data.longitude);
-                    showNotification(`位置を推定しました (精度: 市区町村レベル)`);
-                    return;
-                }
+        const response = await fetch('https://ipapi.co/json/');
+        if (response.ok) {
+            const data = await response.json();
+            if (data.latitude && data.longitude) {
+                setLocation(data.latitude, data.longitude, 'IP推定');
+                return;
             }
-        } catch (e) {
-            console.log('ipapi.co failed, trying alternative...');
         }
-        
-        // Try ip-api.com as backup (no API key, but HTTP only from browser)
-        try {
-            const response = await fetch('https://ipwho.is/', { timeout: 5000 });
-            if (response.ok) {
-                data = await response.json();
-                if (data.latitude && data.longitude) {
-                    setCurrentLocation(data.latitude, data.longitude);
-                    showNotification(`位置を推定しました (精度: 市区町村レベル)`);
-                    return;
-                }
-            }
-        } catch (e) {
-            console.log('ipwho.is failed');
-        }
-        
-        throw new Error('All IP geolocation services failed');
-        
+        throw new Error('IP geolocation failed');
     } catch (error) {
         console.error('IP geolocation error:', error);
-        locationEl.innerHTML = '位置情報を取得できませんでした<br><small>下の入力欄から手動設定してください</small>';
+        statusEl.textContent = '位置情報を取得できませんでした';
+        statusEl.className = 'status error';
     }
 }
 
-// Set current location (from geolocation or manual input)
-function setCurrentLocation(lat, lng) {
+function setLocation(lat, lng, source) {
     currentLocation = { lat, lng };
     
-    const locationEl = document.getElementById('current-location');
-    locationEl.textContent = '位置が設定されました';
+    const statusEl = document.getElementById('location-status');
+    statusEl.textContent = `位置を取得しました (${source})`;
+    statusEl.className = 'status success';
     
-    // Update hidden input fields
-    document.getElementById('manual-lat').value = lat.toFixed(6);
-    document.getElementById('manual-lng').value = lng.toFixed(6);
+    const displayEl = document.getElementById('location-display');
+    displayEl.style.display = 'block';
+    document.getElementById('location-text').textContent = 
+        `緯度: ${lat.toFixed(4)}, 経度: ${lng.toFixed(4)}`;
     
-    // Update map view
-    map.setView([lat, lng], 12);
+    // Enable recommend button
+    document.getElementById('recommend-btn').disabled = false;
     
-    // Add or update current location marker
+    // Update map
+    map.setView([lat, lng], 11);
+    
     if (currentLocationMarker) {
         currentLocationMarker.setLatLng([lat, lng]);
     } else {
@@ -148,498 +107,282 @@ function setCurrentLocation(lat, lng) {
             .addTo(map)
             .bindPopup('<strong>現在地</strong>');
     }
-    
-    // Recalculate distances if we have spots
-    if (spots.length > 0) {
-        loadSpots();
-    }
 }
 
-// Search nearby spots using Overpass API
-async function searchNearbySpots() {
+function setupEventListeners() {
+    document.getElementById('get-location-btn').addEventListener('click', getCurrentLocation);
+    document.getElementById('recommend-btn').addEventListener('click', getRecommendations);
+    
+    // Rating stars
+    document.querySelectorAll('#rating-stars span').forEach(star => {
+        star.addEventListener('click', () => {
+            selectedRating = parseInt(star.dataset.rating);
+            updateStars();
+        });
+    });
+    
+    document.getElementById('submit-feedback').addEventListener('click', submitFeedback);
+    document.getElementById('cancel-feedback').addEventListener('click', closeFeedbackModal);
+}
+
+async function getRecommendations() {
     if (!currentLocation) {
-        showNotification('まず位置を設定してください', true);
+        showNotification('まず位置情報を取得してください', true);
         return;
     }
     
-    if (isSearching) {
-        showNotification('検索中です...', true);
-        return;
-    }
-    
-    isSearching = true;
-    const btn = document.getElementById('search-spots-btn');
+    const btn = document.getElementById('recommend-btn');
     btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> AIが考え中...';
     
-    const radius = parseInt(document.getElementById('search-radius').value) || 10000;
-    const { lat, lng } = currentLocation;
-    
-    // Split queries to maximize results
-    const queries = [
-        // Query 1: Tourism spots
-        {
-            name: '観光スポット',
-            query: `[out:json][timeout:60];
-                (
-                    nwr["tourism"="viewpoint"](around:${radius},${lat},${lng});
-                    nwr["tourism"="attraction"](around:${radius},${lat},${lng});
-                    nwr["tourism"="museum"](around:${radius},${lat},${lng});
-                    nwr["tourism"="gallery"](around:${radius},${lat},${lng});
-                    nwr["tourism"="theme_park"](around:${radius},${lat},${lng});
-                    nwr["tourism"="zoo"](around:${radius},${lat},${lng});
-                    nwr["tourism"="aquarium"](around:${radius},${lat},${lng});
-                    nwr["tourism"="artwork"](around:${radius},${lat},${lng});
-                );
-                out center;`
-        },
-        // Query 2: Nature spots
-        {
-            name: '自然スポット',
-            query: `[out:json][timeout:60];
-                (
-                    node["natural"="peak"](around:${radius},${lat},${lng});
-                    node["natural"="volcano"](around:${radius},${lat},${lng});
-                    node["natural"="waterfall"](around:${radius},${lat},${lng});
-                    nwr["natural"="beach"](around:${radius},${lat},${lng});
-                    node["natural"="hot_spring"](around:${radius},${lat},${lng});
-                    node["natural"="cave_entrance"](around:${radius},${lat},${lng});
-                    node["natural"="spring"](around:${radius},${lat},${lng});
-                    nwr["leisure"="park"]["name"](around:${radius},${lat},${lng});
-                    nwr["leisure"="garden"](around:${radius},${lat},${lng});
-                    nwr["leisure"="nature_reserve"](around:${radius},${lat},${lng});
-                );
-                out center;`
-        },
-        // Query 3: Historic sites
-        {
-            name: '史跡',
-            query: `[out:json][timeout:60];
-                (
-                    nwr["historic"](around:${radius},${lat},${lng});
-                );
-                out center;`
-        },
-        // Query 4: Temples & Shrines
-        {
-            name: '寺社仏閣',
-            query: `[out:json][timeout:60];
-                (
-                    nwr["amenity"="place_of_worship"](around:${radius},${lat},${lng});
-                );
-                out center;`
-        },
-        // Query 5: Restaurants
-        {
-            name: 'レストラン',
-            query: `[out:json][timeout:60];
-                (
-                    node["amenity"="restaurant"](around:${radius},${lat},${lng});
-                    way["amenity"="restaurant"](around:${radius},${lat},${lng});
-                );
-                out center;`
-        },
-        // Query 6: Cafes & others
-        {
-            name: 'カフェ・飲食',
-            query: `[out:json][timeout:60];
-                (
-                    node["amenity"="cafe"](around:${radius},${lat},${lng});
-                    node["amenity"="fast_food"](around:${radius},${lat},${lng});
-                    node["amenity"="bar"](around:${radius},${lat},${lng});
-                    node["amenity"="pub"](around:${radius},${lat},${lng});
-                    node["amenity"="ice_cream"](around:${radius},${lat},${lng});
-                    node["shop"="bakery"](around:${radius},${lat},${lng});
-                );
-                out center;`
-        },
-        // Query 7: Rest areas & services
-        {
-            name: 'SA/PA/道の駅',
-            query: `[out:json][timeout:60];
-                (
-                    nwr["highway"="rest_area"](around:${radius},${lat},${lng});
-                    nwr["highway"="services"](around:${radius},${lat},${lng});
-                    node["amenity"="public_bath"](around:${radius},${lat},${lng});
-                    nwr["leisure"="hot_spring"](around:${radius},${lat},${lng});
-                    nwr["tourism"="camp_site"](around:${radius},${lat},${lng});
-                    nwr["tourism"="caravan_site"](around:${radius},${lat},${lng});
-                    nwr["tourism"="picnic_site"](around:${radius},${lat},${lng});
-                );
-                out center;`
-        },
-        // Query 8: Gas stations & convenience stores
-        {
-            name: 'ガソリン/コンビニ',
-            query: `[out:json][timeout:60];
-                (
-                    node["amenity"="fuel"](around:${radius},${lat},${lng});
-                    node["shop"="convenience"](around:${radius},${lat},${lng});
-                );
-                out center;`
-        },
-        // Query 9: Parking
-        {
-            name: '駐車場',
-            query: `[out:json][timeout:60];
-                (
-                    nwr["amenity"="parking"]["name"](around:${radius},${lat},${lng});
-                );
-                out center;`
-        }
-    ];
-    
-    let totalAdded = 0;
+    const maxDistance = parseFloat(document.getElementById('max-distance').value);
+    const maxTime = parseFloat(document.getElementById('max-time').value);
+    const category = document.getElementById('category-filter').value;
     
     try {
-        const totalQueries = queries.length;
-        for (let i = 0; i < queries.length; i++) {
-            const q = queries[i];
-            btn.textContent = `🔍 ${q.name}を検索中... (${i+1}/${totalQueries})`;
+        const response = await fetch('/api/recommend', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lat: currentLocation.lat,
+                lng: currentLocation.lng,
+                max_distance_km: maxDistance,
+                max_time_hours: maxTime,
+                category: category
+            })
+        });
         
-            try {
-                // Try multiple Overpass API servers
-                const servers = [
-                    'https://overpass-api.de/api/interpreter',
-                    'https://overpass.kumi.systems/api/interpreter',
-                    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
-                ];
-                
-                let response = null;
-                for (const server of servers) {
-                    try {
-                        response = await fetch(server, {
-                            method: 'POST',
-                            body: q.query
-                        });
-                        if (response.ok) break;
-                    } catch (e) {
-                        console.log(`Server ${server} failed, trying next...`);
-                    }
-                }
-                
-                if (!response) {
-                    console.error(`All servers failed for ${q.name}`);
-                    continue;
-                }
-                
-                if (!response.ok) {
-                    console.error(`Query ${q.name} failed:`, response.status);
-                    continue;
-                }
-                
-                const data = await response.json();
-                
-                // Process and save spots
-                for (const element of data.elements) {
-                    if (!element.tags || !element.tags.name) continue;
-                    
-                    // Get coordinates (node has lat/lon, way/relation has center)
-                    let elLat = element.lat;
-                    let elLon = element.lon;
-                    if (!elLat && element.center) {
-                        elLat = element.center.lat;
-                        elLon = element.center.lon;
-                    }
-                    if (!elLat || !elLon) continue;
-                    
-                    const category = categorizeOSMElement(element);
-                    const description = buildDescription(element);
-                    
-                    const spotData = {
-                        name: element.tags.name,
-                        category: category,
-                        description: description,
-                        latitude: elLat,
-                        longitude: elLon,
-                        address: element.tags['addr:full'] || element.tags['addr:street'] || element.tags['addr:city'] || '',
-                        rating: 0
-                    };
-                    
-                    try {
-                        const saveResponse = await fetch('/api/spots', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(spotData)
-                        });
-                        
-                        if (saveResponse.ok) {
-                            totalAdded++;
-                        }
-                    } catch (e) {
-                        // Ignore individual save errors
-                    }
-                }
-            } catch (e) {
-                console.error(`Query ${q.name} error:`, e);
-            }
-            
-            // Small delay between queries to be nice to the API
-            await new Promise(r => setTimeout(r, 500));
+        if (!response.ok) throw new Error('API error');
+        
+        const data = await response.json();
+        currentRecommendations = data.spots || [];
+        
+        // Show AI message
+        const messageEl = document.getElementById('ai-message');
+        if (data.message) {
+            messageEl.textContent = data.message;
+            messageEl.style.display = 'block';
+        } else {
+            messageEl.style.display = 'none';
         }
         
-        showNotification(`${totalAdded}件のスポットを追加しました`);
-        loadSpots();
-        
-    } catch (error) {
-        console.error('Error searching spots:', error);
-        showNotification('スポットの検索に失敗しました', true);
-    } finally {
-        isSearching = false;
-        btn.disabled = false;
-        btn.textContent = '🔍 周辺スポットを自動収集';
-    }
-}
-
-// Categorize OSM element
-function categorizeOSMElement(element) {
-    const tags = element.tags;
-    
-    // Restaurant category
-    if (tags.amenity === 'restaurant' || tags.amenity === 'cafe' ||
-        tags.amenity === 'fast_food' || tags.amenity === 'food_court' ||
-        tags.amenity === 'ice_cream' || tags.amenity === 'pub' ||
-        tags.amenity === 'bar' || tags.shop === 'bakery') {
-        return 'restaurant';
-    }
-    
-    // Rest category
-    if (tags.highway === 'rest_area' || tags.highway === 'services' ||
-        tags.amenity === 'parking' || tags.amenity === 'public_bath' ||
-        tags.leisure === 'hot_spring' || tags.natural === 'hot_spring' ||
-        tags.amenity === 'fuel' || tags.shop === 'convenience' ||
-        tags.amenity === 'toilets' || tags.amenity === 'marketplace' ||
-        tags.tourism === 'camp_site' || tags.tourism === 'caravan_site' ||
-        tags.tourism === 'picnic_site' || tags.leisure === 'picnic_table' ||
-        tags.shop === 'massage') {
-        return 'rest';
-    }
-    
-    // Everything else is a drive spot (tourism, nature, historic, etc.)
-    return 'drive';
-}
-
-// Build description from OSM tags
-function buildDescription(element) {
-    const tags = element.tags;
-    const parts = [];
-    
-    // Type descriptions
-    const typeMap = {
-        'tourism=viewpoint': '展望スポット',
-        'tourism=attraction': '観光スポット',
-        'tourism=museum': '博物館・美術館',
-        'tourism=gallery': 'ギャラリー',
-        'tourism=theme_park': 'テーマパーク',
-        'tourism=zoo': '動物園',
-        'tourism=camp_site': 'キャンプ場',
-        'tourism=caravan_site': 'オートキャンプ場',
-        'tourism=picnic_site': 'ピクニックサイト',
-        'amenity=restaurant': 'レストラン',
-        'amenity=cafe': 'カフェ',
-        'amenity=fast_food': 'ファストフード',
-        'amenity=pub': 'パブ',
-        'amenity=bar': 'バー',
-        'amenity=ice_cream': 'アイスクリーム',
-        'amenity=public_bath': '温泉・銭湯',
-        'amenity=fuel': 'ガソリンスタンド',
-        'amenity=parking': '駐車場',
-        'amenity=marketplace': '道の駅・物産店',
-        'amenity=place_of_worship': '寺社仏閣',
-        'highway=rest_area': '休憩エリア',
-        'highway=services': 'SA・サービスエリア',
-        'highway=viewpoint': '展望スポット',
-        'leisure=hot_spring': '温泉',
-        'leisure=park': '公園',
-        'leisure=nature_reserve': '自然保護区',
-        'leisure=water_park': 'ウォーターパーク',
-        'natural=peak': '山頂',
-        'natural=volcano': '火山',
-        'natural=waterfall': '滝',
-        'natural=hot_spring': '温泉',
-        'natural=beach': 'ビーチ',
-        'natural=cave_entrance': '洞窟',
-        'historic=castle': '城',
-        'historic=monument': '記念碑',
-        'historic=ruins': '遺跡',
-        'historic=memorial': '記念碑',
-        'shop=bakery': 'パン屋',
-        'shop=convenience': 'コンビニ',
-    };
-    
-    // Find matching type
-    for (const [key, label] of Object.entries(typeMap)) {
-        const [k, v] = key.split('=');
-        if (tags[k] === v) {
-            parts.push(label);
-            break;
-        }
-    }
-    
-    // Additional info
-    if (tags.cuisine) {
-        const cuisineMap = {
-            'japanese': '和食', 'sushi': '寿司', 'ramen': 'ラーメン',
-            'italian': 'イタリアン', 'chinese': '中華', 'french': 'フレンチ',
-            'korean': '韓国料理', 'indian': 'インド料理', 'thai': 'タイ料理',
-            'burger': 'ハンバーガー', 'pizza': 'ピザ', 'seafood': '海鮮',
-            'noodle': '麺類', 'curry': 'カレー', 'coffee': 'コーヒー'
-        };
-        const cuisine = tags.cuisine.split(';')[0];
-        parts.push(cuisineMap[cuisine] || cuisine);
-    }
-    
-    if (tags.religion) {
-        const religionMap = { 'shinto': '神社', 'buddhist': '寺院', 'christian': '教会' };
-        parts.push(religionMap[tags.religion] || '');
-    }
-    
-    if (tags.ele) parts.push(`標高${tags.ele}m`);
-    if (tags.opening_hours) parts.push(`営業: ${tags.opening_hours}`);
-    if (tags.phone) parts.push(`℡${tags.phone}`);
-    if (tags.website) parts.push('🌐 Webあり');
-    if (tags.description) parts.push(tags.description);
-    
-    return parts.filter(p => p).join(' / ');
-}
-
-// Load all spots
-async function loadSpots() {
-    try {
-        const url = activeFilter === 'all' 
-            ? '/api/spots' 
-            : `/api/spots?category=${activeFilter}`;
-        
-        const response = await fetch(url);
-        spots = await response.json();
-        
-        // Calculate distance if we have current location
-        if (currentLocation) {
-            spots = spots.map(spot => ({
-                ...spot,
-                distance: calculateDistance(
-                    currentLocation.lat, currentLocation.lng,
-                    spot.latitude, spot.longitude
-                )
-            }));
-            // Sort by distance
-            spots.sort((a, b) => a.distance - b.distance);
+        // Show user stats
+        const statsEl = document.getElementById('user-stats');
+        if (data.user_stats && data.user_stats.total_visits > 0) {
+            statsEl.innerHTML = `📊 あなたの訪問履歴: ${data.user_stats.total_visits}箇所` +
+                (data.user_stats.favorite_category ? 
+                    ` | お気に入り: ${categoryLabels[data.user_stats.favorite_category] || data.user_stats.favorite_category}` : '');
+            statsEl.style.display = 'block';
+        } else {
+            statsEl.style.display = 'none';
         }
         
-        renderSpotsList();
+        renderRecommendations();
         renderSpotMarkers();
+        
     } catch (error) {
-        console.error('Error loading spots:', error);
-        document.getElementById('spots-container').innerHTML = 
-            '<p class="loading">スポットの読み込みに失敗しました</p>';
+        console.error('Recommendation error:', error);
+        showNotification('おすすめの取得に失敗しました', true);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '🤖 AIにおすすめを聞く';
     }
 }
 
-// Calculate distance between two points (Haversine formula)
-function calculateDistance(lat1, lon1, lat2, lon2) {
-    const R = 6371; // Earth's radius in km
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLon = (lon2 - lon1) * Math.PI / 180;
-    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-              Math.sin(dLon/2) * Math.sin(dLon/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-}
-
-// Render spots list in sidebar
-function renderSpotsList() {
+function renderRecommendations() {
+    const section = document.getElementById('recommendations');
     const container = document.getElementById('spots-container');
     
-    const filteredSpots = activeFilter === 'all' 
-        ? spots 
-        : spots.filter(s => s.category === activeFilter);
-    
-    if (!filteredSpots || filteredSpots.length === 0) {
-        container.innerHTML = '<p class="loading">スポットがありません<br><small>「周辺スポットを自動収集」で追加できます</small></p>';
+    if (currentRecommendations.length === 0) {
+        section.style.display = 'none';
         return;
     }
-
-    container.innerHTML = filteredSpots.map(spot => `
-        <div class="spot-card" data-id="${spot.id}" onclick="focusSpot(${spot.id})">
-            <span class="category-badge ${spot.category}">
+    
+    section.style.display = 'block';
+    container.innerHTML = currentRecommendations.map(spot => `
+        <div class="spot-card" data-id="${spot.id}">
+            <span class="category ${spot.category}">
                 ${categoryIcons[spot.category]} ${categoryLabels[spot.category]}
             </span>
             <h3>${escapeHtml(spot.name)}</h3>
-            ${spot.description ? `<p>${escapeHtml(spot.description)}</p>` : ''}
-            ${spot.distance !== undefined ? `<p class="distance">📍 ${spot.distance.toFixed(1)} km</p>` : ''}
-            ${spot.rating > 0 ? `<p>⭐ ${spot.rating}</p>` : ''}
+            ${spot.description ? `<p class="description">${escapeHtml(spot.description)}</p>` : ''}
+            <div class="distance-info">
+                <span>📝 片道 ${spot.distance_km}km</span>
+                <span>⏱️ 片道約 ${formatTime(spot.driving_time_min)}</span>
+                <span>🔄 往復 ${spot.round_trip_km}km / ${formatTime(spot.round_trip_min)}</span>
+            </div>
+            <div class="actions">
+                <button class="btn btn-primary" onclick="acceptSpot(${spot.id}); openInMaps(${spot.latitude}, ${spot.longitude}); event.stopPropagation();">
+                    📍 ここに行く
+                </button>
+                <button class="btn btn-secondary" onclick="openFeedbackModal(${spot.id}, '${escapeHtml(spot.name).replace(/'/g, "\\'")}')"; event.stopPropagation();">
+                    ⭐ 評価する
+                </button>
+            </div>
         </div>
     `).join('');
+    
+    // Click to focus on map
+    container.querySelectorAll('.spot-card').forEach(card => {
+        card.addEventListener('click', () => {
+            const id = parseInt(card.dataset.id);
+            focusSpot(id);
+        });
+    });
 }
 
-// Render spot markers on map
+function formatTime(minutes) {
+    if (minutes < 60) return `${minutes}分`;
+    const hours = Math.floor(minutes / 60);
+    const mins = minutes % 60;
+    return mins > 0 ? `${hours}時間${mins}分` : `${hours}時間`;
+}
+
 function renderSpotMarkers() {
     // Clear existing markers
     spotMarkers.forEach(marker => map.removeLayer(marker));
     spotMarkers = [];
-
-    const filteredSpots = activeFilter === 'all' 
-        ? spots 
-        : spots.filter(s => s.category === activeFilter);
-
-    filteredSpots.forEach(spot => {
+    
+    currentRecommendations.forEach(spot => {
         const icon = L.divIcon({
             className: 'custom-marker',
             html: `<span class="marker-icon">${categoryIcons[spot.category]}</span>`,
             iconSize: [30, 30],
             iconAnchor: [15, 15]
         });
-
+        
         const marker = L.marker([spot.latitude, spot.longitude], { icon })
             .addTo(map)
             .bindPopup(`
-                <div class="popup-content">
-                    <h3>${escapeHtml(spot.name)}</h3>
-                    <p>${categoryIcons[spot.category]} ${categoryLabels[spot.category]}</p>
-                    ${spot.description ? `<p>${escapeHtml(spot.description)}</p>` : ''}
-                    ${spot.address ? `<p>📍 ${escapeHtml(spot.address)}</p>` : ''}
-                    ${spot.rating > 0 ? `<p class="rating">⭐ ${spot.rating}</p>` : ''}
-                </div>
+                <strong>${escapeHtml(spot.name)}</strong><br>
+                ${categoryIcons[spot.category]} ${categoryLabels[spot.category]}<br>
+                📝 ${spot.distance_km}km / ${formatTime(spot.driving_time_min)}
             `);
         
         marker.spotId = spot.id;
         spotMarkers.push(marker);
     });
-}
-
-// Focus on a specific spot
-function focusSpot(id) {
-    const spot = spots.find(s => s.id === id);
-    if (spot) {
-        map.setView([spot.latitude, spot.longitude], 14);
-        const marker = spotMarkers.find(m => m.spotId === id);
-        if (marker) {
-            marker.openPopup();
-        }
+    
+    // Fit bounds if we have spots
+    if (currentRecommendations.length > 0 && currentLocation) {
+        const bounds = L.latLngBounds([[currentLocation.lat, currentLocation.lng]]);
+        currentRecommendations.forEach(spot => {
+            bounds.extend([spot.latitude, spot.longitude]);
+        });
+        map.fitBounds(bounds, { padding: [50, 50] });
     }
 }
 
-// Setup event listeners
-function setupEventListeners() {
-    // Refresh location button
-    document.getElementById('refresh-location').addEventListener('click', getCurrentLocation);
-    
-    // Search spots button
-    document.getElementById('search-spots-btn').addEventListener('click', searchNearbySpots);
-
-    // Filter buttons
-    document.querySelectorAll('.filter-btn').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            activeFilter = btn.dataset.category;
-            loadSpots();
-        });
-    });
-
+function focusSpot(id) {
+    const spot = currentRecommendations.find(s => s.id === id);
+    if (spot) {
+        map.setView([spot.latitude, spot.longitude], 13);
+        const marker = spotMarkers.find(m => m.spotId === id);
+        if (marker) marker.openPopup();
+    }
 }
 
-// Helper functions
+async function acceptSpot(spotId) {
+    try {
+        await fetch('/api/accept', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ spot_id: spotId })
+        });
+    } catch (error) {
+        console.error('Accept error:', error);
+    }
+}
+
+function openInMaps(lat, lng) {
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
+    window.open(url, '_blank');
+}
+
+function openFeedbackModal(spotId, spotName) {
+    feedbackSpotId = spotId;
+    selectedRating = 0;
+    updateStars();
+    document.getElementById('feedback-spot-name').textContent = spotName;
+    document.getElementById('feedback-comment').value = '';
+    document.getElementById('feedback-modal').style.display = 'flex';
+}
+
+function closeFeedbackModal() {
+    document.getElementById('feedback-modal').style.display = 'none';
+    feedbackSpotId = null;
+}
+
+function updateStars() {
+    document.querySelectorAll('#rating-stars span').forEach(star => {
+        const rating = parseInt(star.dataset.rating);
+        star.classList.toggle('active', rating <= selectedRating);
+    });
+}
+
+async function submitFeedback() {
+    if (!feedbackSpotId || selectedRating === 0) {
+        showNotification('評価を選択してください', true);
+        return;
+    }
+    
+    const comment = document.getElementById('feedback-comment').value;
+    
+    try {
+        const response = await fetch('/api/feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                spot_id: feedbackSpotId,
+                rating: selectedRating,
+                comment: comment
+            })
+        });
+        
+        if (!response.ok) throw new Error('API error');
+        
+        showNotification('評価を送信しました！');
+        closeFeedbackModal();
+        loadHistory();
+        
+    } catch (error) {
+        console.error('Feedback error:', error);
+        showNotification('送信に失敗しました', true);
+    }
+}
+
+async function loadHistory() {
+    try {
+        const response = await fetch('/api/history?limit=10');
+        if (!response.ok) throw new Error('API error');
+        
+        const history = await response.json();
+        
+        const section = document.getElementById('history-section');
+        const container = document.getElementById('history-container');
+        
+        if (!history || history.length === 0) {
+            section.style.display = 'none';
+            return;
+        }
+        
+        section.style.display = 'block';
+        container.innerHTML = history.map(item => `
+            <div class="history-item">
+                <span class="history-name">
+                    ${categoryIcons[item.spot_category] || ''} ${escapeHtml(item.spot_name)}
+                </span>
+                <span class="history-rating">
+                    ${item.rating ? '⭐'.repeat(item.rating) : '未評価'}
+                </span>
+            </div>
+        `).join('');
+        
+    } catch (error) {
+        console.error('History error:', error);
+    }
+}
+
 function escapeHtml(text) {
     if (!text) return '';
     const div = document.createElement('div');
@@ -649,38 +392,12 @@ function escapeHtml(text) {
 
 function showNotification(message, isError = false) {
     const notification = document.createElement('div');
-    notification.style.cssText = `
-        position: fixed;
-        bottom: 20px;
-        left: 50%;
-        transform: translateX(-50%);
-        background: ${isError ? '#dc3545' : '#28a745'};
-        color: white;
-        padding: 15px 30px;
-        border-radius: 8px;
-        z-index: 2000;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-        animation: slideUp 0.3s ease;
-    `;
+    notification.className = `notification ${isError ? 'error' : 'success'}`;
     notification.textContent = message;
     document.body.appendChild(notification);
-
+    
     setTimeout(() => {
-        notification.style.animation = 'slideDown 0.3s ease';
+        notification.style.animation = 'slideUp 0.3s ease reverse';
         setTimeout(() => notification.remove(), 300);
     }, 3000);
 }
-
-// Add CSS animation
-const style = document.createElement('style');
-style.textContent = `
-    @keyframes slideUp {
-        from { transform: translateX(-50%) translateY(100px); opacity: 0; }
-        to { transform: translateX(-50%) translateY(0); opacity: 1; }
-    }
-    @keyframes slideDown {
-        from { transform: translateX(-50%) translateY(0); opacity: 1; }
-        to { transform: translateX(-50%) translateY(100px); opacity: 0; }
-    }
-`;
-document.head.appendChild(style);
