@@ -80,6 +80,7 @@ func (s *Server) Serve(addr string) error {
 	// API routes
 	mux.HandleFunc("GET /api/spots", s.HandleGetSpots)
 	mux.HandleFunc("POST /api/recommend", s.HandleRecommend)
+	mux.HandleFunc("POST /api/route", s.HandleGenerateRoute)
 	mux.HandleFunc("POST /api/feedback", s.HandleFeedback)
 	mux.HandleFunc("GET /api/history", s.HandleGetHistory)
 	mux.HandleFunc("POST /api/accept", s.HandleAcceptRecommendation)
@@ -434,6 +435,361 @@ func callClaudeAPI(prompt string) ([]int64, string) {
 	}
 
 	return aiResp.SpotIDs, aiResp.Message
+}
+
+// RouteRequest is the request for route generation
+type RouteRequest struct {
+	Lat               float64 `json:"lat"`
+	Lng               float64 `json:"lng"`
+	MaxDistanceKm     float64 `json:"max_distance_km"`
+	MaxTimeHours      float64 `json:"max_time_hours"`
+	IncludeRestaurant bool    `json:"include_restaurant"`
+	IncludeRest       bool    `json:"include_rest"`
+}
+
+// RouteStop represents a stop in the route
+type RouteStop struct {
+	ID               int64    `json:"id"`
+	Name             string   `json:"name"`
+	Description      string   `json:"description,omitempty"`
+	Category         string   `json:"category"`
+	Lat              float64  `json:"lat"`
+	Lng              float64  `json:"lng"`
+	DistanceFromPrev float64  `json:"distance_from_prev,omitempty"`
+}
+
+// RouteResponse is the response containing the full route
+type RouteResponse struct {
+	Stops           []RouteStop `json:"stops"`
+	TotalDistanceKm float64     `json:"total_distance_km"`
+	TotalTimeMin    float64     `json:"total_time_min"`
+	Message         string      `json:"message"`
+}
+
+// HandleGenerateRoute creates a drive route with multiple stops
+func (s *Server) HandleGenerateRoute(w http.ResponseWriter, r *http.Request) {
+	userID := s.getUserID(w, r)
+
+	var req RouteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.MaxDistanceKm == 0 {
+		req.MaxDistanceKm = 100
+	}
+	if req.MaxTimeHours == 0 {
+		req.MaxTimeHours = 4
+	}
+
+	q := dbgen.New(s.DB)
+	_, _ = q.GetOrCreateUser(r.Context(), userID)
+
+	// Get all spots
+	allSpots, err := q.GetAllSpots(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Filter by distance (use half of max distance as radius for one-way)
+	maxOneWayDist := req.MaxDistanceKm / 3 // rough estimate for round trip with stops
+
+	var driveSpots, restaurants, restSpots []dbgen.Spot
+	for _, spot := range allSpots {
+		dist := haversine(req.Lat, req.Lng, spot.Latitude, spot.Longitude)
+		if dist > maxOneWayDist {
+			continue
+		}
+
+		switch spot.Category {
+		case "drive":
+			driveSpots = append(driveSpots, spot)
+		case "restaurant":
+			if req.IncludeRestaurant {
+				restaurants = append(restaurants, spot)
+			}
+		case "rest":
+			if req.IncludeRest {
+				restSpots = append(restSpots, spot)
+			}
+		}
+	}
+
+	if len(driveSpots) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(RouteResponse{
+			Stops:   []RouteStop{},
+			Message: "条件に合うドライブスポットが見つかりませんでした。距離の条件を緩めてみてください。",
+		})
+		return
+	}
+
+	// Use AI to build optimal route
+	route, message := s.buildRouteWithAI(req.Lat, req.Lng, driveSpots, restaurants, restSpots, req)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(RouteResponse{
+		Stops:           route.Stops,
+		TotalDistanceKm: route.TotalDistanceKm,
+		TotalTimeMin:    route.TotalTimeMin,
+		Message:         message,
+	})
+}
+
+type builtRoute struct {
+	Stops           []RouteStop
+	TotalDistanceKm float64
+	TotalTimeMin    float64
+}
+
+func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restaurants, restSpots []dbgen.Spot, req RouteRequest) (builtRoute, string) {
+	// Build candidate list for AI
+	var candidateList string
+	candidateList += "ドライブスポット:\n"
+	for i, spot := range driveSpots {
+		if i >= 15 {
+			break
+		}
+		dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
+		desc := ""
+		if spot.Description != nil {
+			desc = *spot.Description
+		}
+		candidateList += fmt.Sprintf("  [ID:%d] %s (%.1fkm) - %s\n", spot.ID, spot.Name, dist, desc)
+	}
+
+	if len(restaurants) > 0 {
+		candidateList += "\n食事スポット:\n"
+		for i, spot := range restaurants {
+			if i >= 10 {
+				break
+			}
+			dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
+			desc := ""
+			if spot.Description != nil {
+				desc = *spot.Description
+			}
+			candidateList += fmt.Sprintf("  [ID:%d] %s (%.1fkm) - %s\n", spot.ID, spot.Name, dist, desc)
+		}
+	}
+
+	if len(restSpots) > 0 {
+		candidateList += "\n休憩スポット:\n"
+		for i, spot := range restSpots {
+			if i >= 10 {
+				break
+			}
+			dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
+			desc := ""
+			if spot.Description != nil {
+				desc = *spot.Description
+			}
+			candidateList += fmt.Sprintf("  [ID:%d] %s (%.1fkm) - %s\n", spot.ID, spot.Name, dist, desc)
+		}
+	}
+
+	prompt := fmt.Sprintf(`あなたはドライブルートのプランナーAIです。
+現在地から出発して、いくつかのスポットを経由して現在地に戻る周遊ドライブルートを作成してください。
+
+現在地: 緯度%.4f, 経度%.4f
+総走行距離の目安: %.0fkm以内
+総所要時間の目安: %.0f時間以内
+
+候補スポット:
+%s
+
+要件:
+1. メインの目的地（ドライブスポット）を1〜2箇所選ぶ
+2. 食事スポットがあれば1箇所を途中に組み込む
+3. 休憩スポットがあれば1箇所を組み込む（任意）
+4. 効率的なルート順序にする（行って戻る、無駄な迂回をしない）
+5. 出発地と帰着地は同じ（現在地）
+
+以下のJSON形式で回答してください:
+{
+  "route_ids": [スポットIDを訪問順に配列。出発地・帰着地は含めない],
+  "message": "このルートの特徴や楽しみ方を2文程度で説明"
+}
+`, startLat, startLng, req.MaxDistanceKm, req.MaxTimeHours, candidateList)
+
+	// Call Claude API
+	routeIDs, message := callClaudeAPIForRoute(prompt)
+
+	// Build spot map
+	spotMap := make(map[int64]dbgen.Spot)
+	for _, s := range driveSpots {
+		spotMap[s.ID] = s
+	}
+	for _, s := range restaurants {
+		spotMap[s.ID] = s
+	}
+	for _, s := range restSpots {
+		spotMap[s.ID] = s
+	}
+
+	// Build route with start and end
+	var stops []RouteStop
+	var totalDist float64
+
+	// Start point
+	stops = append(stops, RouteStop{
+		ID:       0,
+		Name:     "現在地",
+		Category: "start",
+		Lat:      startLat,
+		Lng:      startLng,
+	})
+
+	prevLat, prevLng := startLat, startLng
+
+	for _, id := range routeIDs {
+		spot, ok := spotMap[id]
+		if !ok {
+			continue
+		}
+		dist := haversine(prevLat, prevLng, spot.Latitude, spot.Longitude)
+		totalDist += dist
+
+		desc := ""
+		if spot.Description != nil {
+			desc = *spot.Description
+		}
+
+		stops = append(stops, RouteStop{
+			ID:               spot.ID,
+			Name:             spot.Name,
+			Description:      desc,
+			Category:         spot.Category,
+			Lat:              spot.Latitude,
+			Lng:              spot.Longitude,
+			DistanceFromPrev: math.Round(dist*10) / 10,
+		})
+
+		prevLat, prevLng = spot.Latitude, spot.Longitude
+	}
+
+	// Return to start
+	returnDist := haversine(prevLat, prevLng, startLat, startLng)
+	totalDist += returnDist
+
+	stops = append(stops, RouteStop{
+		ID:               0,
+		Name:             "現在地",
+		Category:         "end",
+		Lat:              startLat,
+		Lng:              startLng,
+		DistanceFromPrev: math.Round(returnDist*10) / 10,
+	})
+
+	// Estimate time (40km/h average + 30min per stop)
+	numStops := len(stops) - 2 // exclude start and end
+	totalTimeMin := (totalDist / 40 * 60) + float64(numStops*30)
+
+	// Fallback if AI didn't return valid route
+	if len(stops) <= 2 {
+		// Simple fallback: pick closest drive spot
+		if len(driveSpots) > 0 {
+			closest := driveSpots[0]
+			closestDist := haversine(startLat, startLng, closest.Latitude, closest.Longitude)
+			for _, s := range driveSpots[1:] {
+				d := haversine(startLat, startLng, s.Latitude, s.Longitude)
+				if d < closestDist {
+					closest = s
+					closestDist = d
+				}
+			}
+
+			desc := ""
+			if closest.Description != nil {
+				desc = *closest.Description
+			}
+
+			stops = []RouteStop{
+				{ID: 0, Name: "現在地", Category: "start", Lat: startLat, Lng: startLng},
+				{ID: closest.ID, Name: closest.Name, Description: desc, Category: closest.Category, Lat: closest.Latitude, Lng: closest.Longitude, DistanceFromPrev: math.Round(closestDist*10) / 10},
+				{ID: 0, Name: "現在地", Category: "end", Lat: startLat, Lng: startLng, DistanceFromPrev: math.Round(closestDist*10) / 10},
+			}
+			totalDist = closestDist * 2
+			totalTimeMin = (totalDist / 40 * 60) + 30
+			message = "最寄りのドライブスポットをおすすめします。"
+		}
+	}
+
+	return builtRoute{
+		Stops:           stops,
+		TotalDistanceKm: math.Round(totalDist*10) / 10,
+		TotalTimeMin:    math.Round(totalTimeMin),
+	}, message
+}
+
+func callClaudeAPIForRoute(prompt string) ([]int64, string) {
+	reqBody := map[string]interface{}{
+		"model":      "claude-sonnet-4-20250514",
+		"max_tokens": 500,
+		"messages": []map[string]string{
+			{"role": "user", "content": prompt},
+		},
+	}
+
+	jsonBody, _ := json.Marshal(reqBody)
+
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, _ := http.NewRequest("POST", "http://169.254.169.254/gateway/llm/_/gateway/anthropic/v1/messages", bytes.NewBuffer(jsonBody))
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.Error("Claude API error", "error", err)
+		return nil, ""
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		slog.Error("Parse Claude response", "error", err, "body", string(body))
+		return nil, ""
+	}
+
+	if len(result.Content) == 0 {
+		return nil, ""
+	}
+
+	text := result.Content[0].Text
+
+	// Find JSON in response
+	start := -1
+	end := -1
+	for i, c := range text {
+		if c == '{' && start == -1 {
+			start = i
+		}
+		if c == '}' {
+			end = i + 1
+		}
+	}
+
+	if start == -1 || end == -1 {
+		return nil, ""
+	}
+
+	var aiResp struct {
+		RouteIDs []int64 `json:"route_ids"`
+		Message  string  `json:"message"`
+	}
+	if err := json.Unmarshal([]byte(text[start:end]), &aiResp); err != nil {
+		slog.Error("Parse AI route JSON", "error", err, "text", text)
+		return nil, ""
+	}
+
+	return aiResp.RouteIDs, aiResp.Message
 }
 
 // Haversine formula for distance calculation

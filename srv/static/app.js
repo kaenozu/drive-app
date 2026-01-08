@@ -2,21 +2,26 @@
 let map;
 let currentLocation = null;
 let currentLocationMarker = null;
-let spotMarkers = [];
-let currentRecommendations = [];
+let routeMarkers = [];
+let routeLine = null;
+let currentRoute = null;
 let selectedRating = 0;
 let feedbackSpotId = null;
 
 const categoryIcons = {
+    start: '📍',
     drive: '🛣️',
     restaurant: '🍽️',
-    rest: '☕'
+    rest: '☕',
+    end: '🏁'
 };
 
 const categoryLabels = {
-    drive: 'ドライブ',
+    start: '出発地',
+    drive: 'ドライブスポット',
     restaurant: '食事',
-    rest: '休憩'
+    rest: '休憩',
+    end: '帰着'
 };
 
 // Initialize
@@ -88,8 +93,8 @@ function setLocation(lat, lng, source) {
     document.getElementById('location-text').textContent = 
         `緯度: ${lat.toFixed(4)}, 経度: ${lng.toFixed(4)}`;
     
-    // Enable recommend button
-    document.getElementById('recommend-btn').disabled = false;
+    // Enable generate button
+    document.getElementById('generate-route-btn').disabled = false;
     
     // Update map
     map.setView([lat, lng], 11);
@@ -111,7 +116,8 @@ function setLocation(lat, lng, source) {
 
 function setupEventListeners() {
     document.getElementById('get-location-btn').addEventListener('click', getCurrentLocation);
-    document.getElementById('recommend-btn').addEventListener('click', getRecommendations);
+    document.getElementById('generate-route-btn').addEventListener('click', generateRoute);
+    document.getElementById('regenerate-btn')?.addEventListener('click', generateRoute);
     
     // Rating stars
     document.querySelectorAll('#rating-stars span').forEach(star => {
@@ -125,22 +131,23 @@ function setupEventListeners() {
     document.getElementById('cancel-feedback').addEventListener('click', closeFeedbackModal);
 }
 
-async function getRecommendations() {
+async function generateRoute() {
     if (!currentLocation) {
         showNotification('まず位置情報を取得してください', true);
         return;
     }
     
-    const btn = document.getElementById('recommend-btn');
+    const btn = document.getElementById('generate-route-btn');
     btn.disabled = true;
-    btn.innerHTML = '<span class="spinner"></span> AIが考え中...';
+    btn.innerHTML = '<span class="spinner"></span> AIがルートを作成中...';
     
     const maxDistance = parseFloat(document.getElementById('max-distance').value);
     const maxTime = parseFloat(document.getElementById('max-time').value);
-    const category = document.getElementById('category-filter').value;
+    const includeRestaurant = document.getElementById('include-restaurant').checked;
+    const includeRest = document.getElementById('include-rest').checked;
     
     try {
-        const response = await fetch('/api/recommend', {
+        const response = await fetch('/api/route', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -148,155 +155,170 @@ async function getRecommendations() {
                 lng: currentLocation.lng,
                 max_distance_km: maxDistance,
                 max_time_hours: maxTime,
-                category: category
+                include_restaurant: includeRestaurant,
+                include_rest: includeRest
             })
         });
         
         if (!response.ok) throw new Error('API error');
         
         const data = await response.json();
-        currentRecommendations = data.spots || [];
+        currentRoute = data;
         
         // Show AI message
         const messageEl = document.getElementById('ai-message');
         if (data.message) {
-            messageEl.textContent = data.message;
+            messageEl.innerHTML = `🤖 AI: ${escapeHtml(data.message)}`;
             messageEl.style.display = 'block';
         } else {
             messageEl.style.display = 'none';
         }
         
-        // Show user stats
-        const statsEl = document.getElementById('user-stats');
-        if (data.user_stats && data.user_stats.total_visits > 0) {
-            statsEl.innerHTML = `📊 あなたの訪問履歴: ${data.user_stats.total_visits}箇所` +
-                (data.user_stats.favorite_category ? 
-                    ` | お気に入り: ${categoryLabels[data.user_stats.favorite_category] || data.user_stats.favorite_category}` : '');
-            statsEl.style.display = 'block';
-        } else {
-            statsEl.style.display = 'none';
-        }
-        
-        renderRecommendations();
-        renderSpotMarkers();
+        renderRoute();
+        renderRouteOnMap();
         
     } catch (error) {
-        console.error('Recommendation error:', error);
-        showNotification('おすすめの取得に失敗しました', true);
+        console.error('Route generation error:', error);
+        showNotification('ルートの作成に失敗しました', true);
     } finally {
         btn.disabled = false;
-        btn.innerHTML = '🤖 AIにおすすめを聞く';
+        btn.innerHTML = '🗺️ ドライブルートを作成';
     }
 }
 
-function renderRecommendations() {
-    const section = document.getElementById('recommendations');
-    const container = document.getElementById('spots-container');
+function renderRoute() {
+    const section = document.getElementById('route-section');
+    const summaryEl = document.getElementById('route-summary');
+    const timelineEl = document.getElementById('route-timeline');
     
-    if (currentRecommendations.length === 0) {
+    if (!currentRoute || !currentRoute.stops || currentRoute.stops.length === 0) {
         section.style.display = 'none';
         return;
     }
     
     section.style.display = 'block';
-    container.innerHTML = currentRecommendations.map(spot => `
-        <div class="spot-card" data-id="${spot.id}">
-            <span class="category ${spot.category}">
-                ${categoryIcons[spot.category]} ${categoryLabels[spot.category]}
-            </span>
-            <h3>${escapeHtml(spot.name)}</h3>
-            ${spot.description ? `<p class="description">${escapeHtml(spot.description)}</p>` : ''}
-            <div class="distance-info">
-                <span>📝 片道 ${spot.distance_km}km</span>
-                <span>⏱️ 片道約 ${formatTime(spot.driving_time_min)}</span>
-                <span>🔄 往復 ${spot.round_trip_km}km / ${formatTime(spot.round_trip_min)}</span>
-            </div>
-            <div class="actions">
-                <button class="btn btn-primary" onclick="acceptSpot(${spot.id}); openInMaps(${spot.latitude}, ${spot.longitude}); event.stopPropagation();">
-                    📍 ここに行く
-                </button>
-                <button class="btn btn-secondary" onclick="openFeedbackModal(${spot.id}, '${escapeHtml(spot.name).replace(/'/g, "\\'")}')"; event.stopPropagation();">
-                    ⭐ 評価する
-                </button>
-            </div>
+    
+    // Summary
+    summaryEl.innerHTML = `
+        <div class="summary-item">
+            <span class="label">総距離</span>
+            <span class="value">${currentRoute.total_distance_km.toFixed(1)} km</span>
         </div>
-    `).join('');
+        <div class="summary-item">
+            <span class="label">総時間</span>
+            <span class="value">${formatTime(currentRoute.total_time_min)}</span>
+        </div>
+        <div class="summary-item">
+            <span class="label">経由地</span>
+            <span class="value">${currentRoute.stops.length - 2}箇所</span>
+        </div>
+    `;
     
-    // Click to focus on map
-    container.querySelectorAll('.spot-card').forEach(card => {
-        card.addEventListener('click', () => {
-            const id = parseInt(card.dataset.id);
-            focusSpot(id);
-        });
-    });
+    // Timeline
+    timelineEl.innerHTML = currentRoute.stops.map((stop, index) => {
+        const isFirst = index === 0;
+        const isLast = index === currentRoute.stops.length - 1;
+        const icon = isFirst ? categoryIcons.start : (isLast ? categoryIcons.end : categoryIcons[stop.category]);
+        const label = isFirst ? '出発' : (isLast ? '帰着' : categoryLabels[stop.category]);
+        
+        return `
+            <div class="timeline-item ${stop.category}">
+                <div class="timeline-icon">${icon}</div>
+                <div class="timeline-content">
+                    <div class="timeline-header">
+                        <span class="timeline-label">${label}</span>
+                        ${stop.distance_from_prev ? `<span class="timeline-distance">${stop.distance_from_prev.toFixed(1)}km</span>` : ''}
+                    </div>
+                    <div class="timeline-name">${escapeHtml(stop.name)}</div>
+                    ${stop.description ? `<div class="timeline-desc">${escapeHtml(stop.description)}</div>` : ''}
+                </div>
+            </div>
+        `;
+    }).join('<div class="timeline-connector"></div>');
+    
+    // Update Google Maps link
+    updateGoogleMapsLink();
 }
 
-function formatTime(minutes) {
-    if (minutes < 60) return `${minutes}分`;
-    const hours = Math.floor(minutes / 60);
-    const mins = minutes % 60;
-    return mins > 0 ? `${hours}時間${mins}分` : `${hours}時間`;
+function updateGoogleMapsLink() {
+    if (!currentRoute || !currentRoute.stops || currentRoute.stops.length < 2) return;
+    
+    const stops = currentRoute.stops;
+    const origin = `${stops[0].lat},${stops[0].lng}`;
+    const destination = `${stops[stops.length - 1].lat},${stops[stops.length - 1].lng}`;
+    
+    // Waypoints (excluding first and last)
+    const waypoints = stops.slice(1, -1).map(stop => `${stop.lat},${stop.lng}`).join('|');
+    
+    let url = `https://www.google.com/maps/dir/?api=1&origin=${origin}&destination=${destination}&travelmode=driving`;
+    if (waypoints) {
+        url += `&waypoints=${encodeURIComponent(waypoints)}`;
+    }
+    
+    document.getElementById('google-maps-link').href = url;
 }
 
-function renderSpotMarkers() {
-    // Clear existing markers
-    spotMarkers.forEach(marker => map.removeLayer(marker));
-    spotMarkers = [];
+function renderRouteOnMap() {
+    // Clear existing route
+    routeMarkers.forEach(marker => map.removeLayer(marker));
+    routeMarkers = [];
+    if (routeLine) {
+        map.removeLayer(routeLine);
+        routeLine = null;
+    }
     
-    currentRecommendations.forEach(spot => {
-        const icon = L.divIcon({
+    if (!currentRoute || !currentRoute.stops || currentRoute.stops.length === 0) return;
+    
+    const stops = currentRoute.stops;
+    const latlngs = [];
+    
+    stops.forEach((stop, index) => {
+        const isFirst = index === 0;
+        const isLast = index === stops.length - 1;
+        const icon = isFirst ? categoryIcons.start : (isLast ? categoryIcons.end : categoryIcons[stop.category]);
+        const label = isFirst ? '出発地' : (isLast ? '帰着地' : categoryLabels[stop.category]);
+        
+        const markerIcon = L.divIcon({
             className: 'custom-marker',
-            html: `<span class="marker-icon">${categoryIcons[spot.category]}</span>`,
-            iconSize: [30, 30],
-            iconAnchor: [15, 15]
+            html: `<span class="marker-icon marker-${index}">${icon}</span>`,
+            iconSize: [36, 36],
+            iconAnchor: [18, 18]
         });
         
-        const marker = L.marker([spot.latitude, spot.longitude], { icon })
+        const marker = L.marker([stop.lat, stop.lng], { icon: markerIcon })
             .addTo(map)
             .bindPopup(`
-                <strong>${escapeHtml(spot.name)}</strong><br>
-                ${categoryIcons[spot.category]} ${categoryLabels[spot.category]}<br>
-                📝 ${spot.distance_km}km / ${formatTime(spot.driving_time_min)}
+                <strong>${index + 1}. ${escapeHtml(stop.name)}</strong><br>
+                ${icon} ${label}
+                ${stop.distance_from_prev ? `<br>前の地点から ${stop.distance_from_prev.toFixed(1)}km` : ''}
             `);
         
-        marker.spotId = spot.id;
-        spotMarkers.push(marker);
+        routeMarkers.push(marker);
+        latlngs.push([stop.lat, stop.lng]);
     });
     
-    // Fit bounds if we have spots
-    if (currentRecommendations.length > 0 && currentLocation) {
-        const bounds = L.latLngBounds([[currentLocation.lat, currentLocation.lng]]);
-        currentRecommendations.forEach(spot => {
-            bounds.extend([spot.latitude, spot.longitude]);
-        });
+    // Draw route line
+    if (latlngs.length >= 2) {
+        routeLine = L.polyline(latlngs, {
+            color: '#4CAF50',
+            weight: 4,
+            opacity: 0.8,
+            dashArray: '10, 10'
+        }).addTo(map);
+    }
+    
+    // Fit bounds
+    if (latlngs.length > 0) {
+        const bounds = L.latLngBounds(latlngs);
         map.fitBounds(bounds, { padding: [50, 50] });
     }
 }
 
-function focusSpot(id) {
-    const spot = currentRecommendations.find(s => s.id === id);
-    if (spot) {
-        map.setView([spot.latitude, spot.longitude], 13);
-        const marker = spotMarkers.find(m => m.spotId === id);
-        if (marker) marker.openPopup();
-    }
-}
-
-async function acceptSpot(spotId) {
-    try {
-        await fetch('/api/accept', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ spot_id: spotId })
-        });
-    } catch (error) {
-        console.error('Accept error:', error);
-    }
-}
-
-function openInMaps(lat, lng) {
-    const url = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
-    window.open(url, '_blank');
+function formatTime(minutes) {
+    if (minutes < 60) return `${Math.round(minutes)}分`;
+    const hours = Math.floor(minutes / 60);
+    const mins = Math.round(minutes % 60);
+    return mins > 0 ? `${hours}時間${mins}分` : `${hours}時間`;
 }
 
 function openFeedbackModal(spotId, spotName) {

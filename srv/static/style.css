@@ -385,6 +385,179 @@ main {
     text-shadow: 0 2px 4px rgba(0,0,0,0.3);
 }
 
+/* Checkbox group */
+.checkbox-group {
+    display: flex;
+    gap: 1.5rem;
+}
+
+.checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+    font-weight: normal;
+}
+
+.checkbox-label input {
+    width: auto;
+}
+
+/* Route card */
+.route-card {
+    background: white;
+}
+
+.route-summary {
+    display: flex;
+    gap: 1rem;
+    flex-wrap: wrap;
+    margin-bottom: 1.5rem;
+    padding: 1rem;
+    background: linear-gradient(135deg, #667eea10 0%, #764ba210 100%);
+    border-radius: 8px;
+}
+
+.summary-item {
+    flex: 1;
+    min-width: 100px;
+    text-align: center;
+}
+
+.summary-item .label {
+    display: block;
+    font-size: 0.8rem;
+    color: #718096;
+    margin-bottom: 0.25rem;
+}
+
+.summary-item .value {
+    font-size: 1.2rem;
+    font-weight: 700;
+    color: #4a5568;
+}
+
+/* Route timeline */
+.route-timeline {
+    position: relative;
+    padding: 0;
+}
+
+.timeline-item {
+    display: flex;
+    gap: 1rem;
+    padding: 1rem;
+    background: #f7fafc;
+    border-radius: 8px;
+    margin-bottom: 0;
+}
+
+.timeline-item.drive {
+    background: #c6f6d520;
+    border-left: 3px solid #48bb78;
+}
+
+.timeline-item.restaurant {
+    background: #fed7e220;
+    border-left: 3px solid #ed64a6;
+}
+
+.timeline-item.rest {
+    background: #feebc820;
+    border-left: 3px solid #ed8936;
+}
+
+.timeline-icon {
+    font-size: 1.8rem;
+    width: 50px;
+    height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: white;
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    flex-shrink: 0;
+}
+
+.timeline-content {
+    flex: 1;
+}
+
+.timeline-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.25rem;
+}
+
+.timeline-label {
+    font-size: 0.75rem;
+    color: #718096;
+    text-transform: uppercase;
+    font-weight: 600;
+}
+
+.timeline-distance {
+    font-size: 0.85rem;
+    color: #667eea;
+    font-weight: 600;
+}
+
+.timeline-name {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #2d3748;
+}
+
+.timeline-desc {
+    font-size: 0.85rem;
+    color: #718096;
+    margin-top: 0.25rem;
+}
+
+.timeline-connector {
+    width: 3px;
+    height: 20px;
+    background: #cbd5e0;
+    margin-left: 34px;
+}
+
+.route-actions {
+    display: flex;
+    gap: 1rem;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 2px solid #edf2f7;
+}
+
+.route-actions .btn {
+    flex: 1;
+    text-decoration: none;
+}
+
+.btn-success {
+    background: #48bb78;
+    color: white;
+}
+
+.btn-success:hover:not(:disabled) {
+    background: #38a169;
+}
+
+/* Map markers for route */
+.marker-0 { background: #667eea; border-radius: 50%; padding: 4px; }
+.marker-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 36px;
+    height: 36px;
+    background: white;
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+}
+
 /* Responsive */
 @media (max-width: 600px) {
     header h1 {

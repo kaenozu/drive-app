@@ -3,14 +3,14 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ドライブスポットファインダー</title>
+    <title>ドライブルートプランナー</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
     <header>
-        <h1>🚗 ドライブスポットファインダー</h1>
-        <p>AIがあなたにぴったりのドライブスポットを提案します</p>
+        <h1>🚗 ドライブルートプランナー</h1>
+        <p>AIがあなたにぴったりのドライブコースを提案します</p>
     </header>
 
     <main>
@@ -31,50 +31,61 @@
             <section class="card preference-card">
                 <h2>⚙️ 条件設定</h2>
                 <div class="form-group">
-                    <label for="max-distance">最大距離（片道）</label>
+                    <label for="max-distance">最大距離（総走行）</label>
                     <select id="max-distance">
-                        <option value="30">30km</option>
-                        <option value="50" selected>50km</option>
-                        <option value="100">100km</option>
+                        <option value="50">50km</option>
+                        <option value="100" selected>100km</option>
                         <option value="150">150km</option>
                         <option value="200">200km</option>
+                        <option value="300">300km</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="max-time">最大所要時間（片道）</label>
+                    <label for="max-time">最大所要時間（総計）</label>
                     <select id="max-time">
-                        <option value="1">1時間</option>
-                        <option value="2" selected>2時間</option>
+                        <option value="2">2時間</option>
                         <option value="3">3時間</option>
-                        <option value="4">4時間以上</option>
+                        <option value="4" selected>4時間</option>
+                        <option value="6">6時間</option>
+                        <option value="8">8時間</option>
                     </select>
                 </div>
                 <div class="form-group">
-                    <label for="category-filter">カテゴリ</label>
-                    <select id="category-filter">
-                        <option value="">すべて</option>
-                        <option value="drive">🛣️ ドライブスポット</option>
-                        <option value="restaurant">🍽️ 食事</option>
-                        <option value="rest">☕ 休憩</option>
-                    </select>
+                    <label>含めるスポット</label>
+                    <div class="checkbox-group">
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="include-restaurant" checked>
+                            🍽️ 食事
+                        </label>
+                        <label class="checkbox-label">
+                            <input type="checkbox" id="include-rest" checked>
+                            ☕ 休憩
+                        </label>
+                    </div>
                 </div>
             </section>
 
-            <!-- Recommend Button -->
-            <button id="recommend-btn" class="btn btn-primary btn-large" disabled>
-                🤖 AIにおすすめを聞く
+            <!-- Generate Route Button -->
+            <button id="generate-route-btn" class="btn btn-primary btn-large" disabled>
+                🗺️ ドライブルートを作成
             </button>
 
             <!-- AI Message -->
             <div id="ai-message" class="ai-message" style="display:none;"></div>
 
-            <!-- User Stats -->
-            <div id="user-stats" class="user-stats" style="display:none;"></div>
-
-            <!-- Recommendations -->
-            <section id="recommendations" class="recommendations" style="display:none;">
-                <h2>🎯 おすすめスポット</h2>
-                <div id="spots-container"></div>
+            <!-- Route Display -->
+            <section id="route-section" class="card route-card" style="display:none;">
+                <h2>🛣️ 今日のドライブルート</h2>
+                <div class="route-summary" id="route-summary"></div>
+                <div class="route-timeline" id="route-timeline"></div>
+                <div class="route-actions">
+                    <a id="google-maps-link" class="btn btn-success btn-large" href="#" target="_blank">
+                        🗺️ Google Mapsで開く
+                    </a>
+                    <button id="regenerate-btn" class="btn btn-secondary">
+                        🔄 別のルートを提案
+                    </button>
+                </div>
             </section>
 
             <!-- Map -->
@@ -85,7 +96,7 @@
 
             <!-- History -->
             <section id="history-section" class="card history-card" style="display:none;">
-                <h2>📝 訪問履歴</h2>
+                <h2>📝 過去のドライブ</h2>
                 <div id="history-container"></div>
             </section>
         </div>
@@ -94,7 +105,7 @@
     <!-- Feedback Modal -->
     <div id="feedback-modal" class="modal" style="display:none;">
         <div class="modal-content">
-            <h3>📝 訪問レビュー</h3>
+            <h3>📝 ドライブの感想</h3>
             <p id="feedback-spot-name"></p>
             <div class="rating-input">
                 <label>評価:</label>
