@@ -24,8 +24,35 @@
                     <h2>📍 現在地</h2>
                     <p id="current-location">位置情報を取得中...</p>
                     <button id="refresh-location" class="btn btn-primary">
-                        🔄 位置を更新
+                        🔄 位置を取得
                     </button>
+                    
+                    <div class="manual-location">
+                        <p class="section-label">手動で位置を設定:</p>
+                        <div class="location-inputs">
+                            <input type="number" id="manual-lat" step="any" placeholder="緯度 (35.6762)" value="35.6762">
+                            <input type="number" id="manual-lng" step="any" placeholder="経度 (139.6503)" value="139.6503">
+                        </div>
+                        <button id="set-location-btn" class="btn btn-secondary">位置を設定</button>
+                    </div>
+                </div>
+
+                <div class="search-section">
+                    <h2>🔍 スポット自動収集</h2>
+                    <div class="search-options">
+                        <label>検索範囲:</label>
+                        <select id="search-radius">
+                            <option value="5000">5 km</option>
+                            <option value="10000" selected>10 km</option>
+                            <option value="20000">20 km</option>
+                            <option value="30000">30 km</option>
+                            <option value="50000">50 km</option>
+                        </select>
+                    </div>
+                    <button id="search-spots-btn" class="btn btn-success">
+                        🔍 周辺スポットを自動収集
+                    </button>
+                    <p class="search-hint">展望台・観光地・飲食店・休憩所等を自動で収集します</p>
                 </div>
 
                 <div class="category-filter">
@@ -48,7 +75,10 @@
                 <div class="add-spot-section">
                     <h2>➕ スポットを追加</h2>
                     <button id="add-spot-btn" class="btn btn-success">
-                        新しいスポットを追加
+                        新しいスポットを手動追加
+                    </button>
+                    <button id="clear-spots-btn" class="btn btn-danger-outline">
+                        🗑️ 全スポットを削除
                     </button>
                 </div>
             </div>

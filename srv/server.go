@@ -79,6 +79,7 @@ func (s *Server) Serve(addr string) error {
 	mux.HandleFunc("GET /api/spots", s.HandleGetSpots)
 	mux.HandleFunc("POST /api/spots", s.HandleCreateSpot)
 	mux.HandleFunc("DELETE /api/spots/{id}", s.HandleDeleteSpot)
+	mux.HandleFunc("DELETE /api/spots/clear", s.HandleClearAllSpots)
 	mux.HandleFunc("GET /api/nearby", s.HandleGetNearbySpots)
 
 	slog.Info("starting server", "addr", addr)
@@ -164,6 +165,15 @@ func (s *Server) HandleDeleteSpot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) HandleClearAllSpots(w http.ResponseWriter, r *http.Request) {
+	_, err := s.DB.ExecContext(r.Context(), "DELETE FROM spots")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

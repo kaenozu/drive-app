@@ -6,18 +6,19 @@ let spotMarkers = [];
 let pickingLocation = false;
 let spots = [];
 let activeFilter = 'all';
+let isSearching = false;
 
 // Category icons
 const categoryIcons = {
-    drive: '\ud83d\udee3\ufe0f',
-    restaurant: '\ud83c\udf7d\ufe0f',
-    rest: '\u2615'
+    drive: '🛣️',
+    restaurant: '🍽️',
+    rest: '☕'
 };
 
 const categoryLabels = {
-    drive: '\u30c9\u30e9\u30a4\u30d6',
-    restaurant: '\u98df\u4e8b',
-    rest: '\u4f11\u61a9'
+    drive: 'ドライブ',
+    restaurant: '食事',
+    rest: '休憩'
 };
 
 // Initialize the app
@@ -44,7 +45,7 @@ function initMap() {
             document.getElementById('spot-lng').value = e.latlng.lng.toFixed(6);
             pickingLocation = false;
             map.getContainer().style.cursor = '';
-            showNotification('\u4f4d\u7f6e\u3092\u9078\u629e\u3057\u307e\u3057\u305f');
+            showNotification('位置を選択しました');
         }
     });
 }
@@ -54,45 +55,27 @@ function getCurrentLocation() {
     const locationEl = document.getElementById('current-location');
     
     if (!navigator.geolocation) {
-        locationEl.textContent = '\u4f4d\u7f6e\u60c5\u5831\u306f\u30b5\u30dd\u30fc\u30c8\u3055\u308c\u3066\u3044\u307e\u305b\u3093';
+        locationEl.innerHTML = '位置情報はサポートされていません<br><small>下の入力欄から手動設定できます</small>';
         return;
     }
 
-    locationEl.textContent = '\u4f4d\u7f6e\u60c5\u5831\u3092\u53d6\u5f97\u4e2d...';
+    locationEl.textContent = '位置情報を取得中...';
 
     navigator.geolocation.getCurrentPosition(
         (position) => {
-            currentLocation = {
-                lat: position.coords.latitude,
-                lng: position.coords.longitude
-            };
-            
-            locationEl.textContent = `\u7def\u5ea6: ${currentLocation.lat.toFixed(4)}, \u7d4c\u5ea6: ${currentLocation.lng.toFixed(4)}`;
-            
-            // Update map view
-            map.setView([currentLocation.lat, currentLocation.lng], 12);
-            
-            // Add or update current location marker
-            if (currentLocationMarker) {
-                currentLocationMarker.setLatLng([currentLocation.lat, currentLocation.lng]);
-            } else {
-                const icon = L.divIcon({
-                    className: 'custom-marker',
-                    html: '<div class="current-location-marker"></div>',
-                    iconSize: [20, 20],
-                    iconAnchor: [10, 10]
-                });
-                currentLocationMarker = L.marker([currentLocation.lat, currentLocation.lng], { icon })
-                    .addTo(map)
-                    .bindPopup('<strong>\u73fe\u5728\u5730</strong>');
-            }
-
-            // Load nearby spots
-            loadNearbySpots();
+            setCurrentLocation(position.coords.latitude, position.coords.longitude);
         },
         (error) => {
             console.error('Geolocation error:', error);
-            locationEl.textContent = '\u4f4d\u7f6e\u60c5\u5831\u3092\u53d6\u5f97\u3067\u304d\u307e\u305b\u3093\u3067\u3057\u305f';
+            let message = '位置情報を取得できませんでした';
+            if (error.code === 1) {
+                message = '位置情報の許可が必要です';
+            } else if (error.code === 2) {
+                message = '位置情報が利用できません';
+            } else if (error.code === 3) {
+                message = '位置情報の取得がタイムアウトしました';
+            }
+            locationEl.innerHTML = `${message}<br><small>下の入力欄から手動設定できます</small>`;
         },
         {
             enableHighAccuracy: true,
@@ -100,6 +83,201 @@ function getCurrentLocation() {
             maximumAge: 60000
         }
     );
+}
+
+// Set current location (from geolocation or manual input)
+function setCurrentLocation(lat, lng) {
+    currentLocation = { lat, lng };
+    
+    const locationEl = document.getElementById('current-location');
+    locationEl.textContent = `緯度: ${lat.toFixed(4)}, 経度: ${lng.toFixed(4)}`;
+    
+    // Update manual input fields
+    document.getElementById('manual-lat').value = lat.toFixed(6);
+    document.getElementById('manual-lng').value = lng.toFixed(6);
+    
+    // Update map view
+    map.setView([lat, lng], 12);
+    
+    // Add or update current location marker
+    if (currentLocationMarker) {
+        currentLocationMarker.setLatLng([lat, lng]);
+    } else {
+        const icon = L.divIcon({
+            className: 'custom-marker',
+            html: '<div class="current-location-marker"></div>',
+            iconSize: [20, 20],
+            iconAnchor: [10, 10]
+        });
+        currentLocationMarker = L.marker([lat, lng], { icon })
+            .addTo(map)
+            .bindPopup('<strong>現在地</strong>');
+    }
+}
+
+// Set location manually
+function setLocationManually() {
+    const lat = parseFloat(document.getElementById('manual-lat').value);
+    const lng = parseFloat(document.getElementById('manual-lng').value);
+    
+    if (isNaN(lat) || isNaN(lng)) {
+        showNotification('有効な緯度・経度を入力してください', true);
+        return;
+    }
+    
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+        showNotification('緯度は-90〜90、経度は-180〜180の範囲で入力してください', true);
+        return;
+    }
+    
+    setCurrentLocation(lat, lng);
+    showNotification('位置を設定しました');
+}
+
+// Search nearby spots using Overpass API
+async function searchNearbySpots() {
+    if (!currentLocation) {
+        showNotification('まず位置を設定してください', true);
+        return;
+    }
+    
+    if (isSearching) {
+        showNotification('検索中です...', true);
+        return;
+    }
+    
+    isSearching = true;
+    const btn = document.getElementById('search-spots-btn');
+    btn.disabled = true;
+    btn.textContent = '🔍 検索中...';
+    
+    const radius = parseInt(document.getElementById('search-radius').value) || 10000;
+    const { lat, lng } = currentLocation;
+    
+    try {
+        // Overpass API query for various POIs
+        const query = `
+            [out:json][timeout:25];
+            (
+                // Scenic viewpoints and tourist attractions
+                node["tourism"="viewpoint"](around:${radius},${lat},${lng});
+                node["tourism"="attraction"](around:${radius},${lat},${lng});
+                way["tourism"="attraction"](around:${radius},${lat},${lng});
+                
+                // Restaurants
+                node["amenity"="restaurant"](around:${radius},${lat},${lng});
+                node["amenity"="cafe"](around:${radius},${lat},${lng});
+                
+                // Rest areas and parking
+                node["highway"="rest_area"](around:${radius},${lat},${lng});
+                node["highway"="services"](around:${radius},${lat},${lng});
+                node["amenity"="parking"]["name"](around:${radius},${lat},${lng});
+                
+                // Hot springs (onsen)
+                node["amenity"="public_bath"](around:${radius},${lat},${lng});
+                node["leisure"="hot_spring"](around:${radius},${lat},${lng});
+            );
+            out body;
+            >;
+            out skel qt;
+        `;
+        
+        const response = await fetch('https://overpass-api.de/api/interpreter', {
+            method: 'POST',
+            body: query
+        });
+        
+        if (!response.ok) {
+            throw new Error('Overpass API error');
+        }
+        
+        const data = await response.json();
+        
+        // Process and save spots
+        let addedCount = 0;
+        for (const element of data.elements) {
+            if (!element.tags || !element.tags.name) continue;
+            if (!element.lat || !element.lon) continue;
+            
+            const category = categorizeOSMElement(element);
+            const description = buildDescription(element);
+            
+            const spotData = {
+                name: element.tags.name,
+                category: category,
+                description: description,
+                latitude: element.lat,
+                longitude: element.lon,
+                address: element.tags['addr:full'] || element.tags['addr:street'] || '',
+                rating: 0
+            };
+            
+            try {
+                const saveResponse = await fetch('/api/spots', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(spotData)
+                });
+                
+                if (saveResponse.ok) {
+                    addedCount++;
+                }
+            } catch (e) {
+                console.error('Error saving spot:', e);
+            }
+        }
+        
+        showNotification(`${addedCount}件のスポットを追加しました`);
+        loadSpots();
+        
+    } catch (error) {
+        console.error('Error searching spots:', error);
+        showNotification('スポットの検索に失敗しました', true);
+    } finally {
+        isSearching = false;
+        btn.disabled = false;
+        btn.textContent = '🔍 周辺スポットを自動収集';
+    }
+}
+
+// Categorize OSM element
+function categorizeOSMElement(element) {
+    const tags = element.tags;
+    
+    if (tags.tourism === 'viewpoint' || tags.tourism === 'attraction') {
+        return 'drive';
+    }
+    if (tags.amenity === 'restaurant' || tags.amenity === 'cafe') {
+        return 'restaurant';
+    }
+    if (tags.highway === 'rest_area' || tags.highway === 'services' || 
+        tags.amenity === 'parking' || tags.amenity === 'public_bath' ||
+        tags.leisure === 'hot_spring') {
+        return 'rest';
+    }
+    
+    return 'drive';
+}
+
+// Build description from OSM tags
+function buildDescription(element) {
+    const tags = element.tags;
+    const parts = [];
+    
+    if (tags.tourism === 'viewpoint') parts.push('展望スポット');
+    if (tags.tourism === 'attraction') parts.push('観光スポット');
+    if (tags.amenity === 'restaurant') parts.push('レストラン');
+    if (tags.amenity === 'cafe') parts.push('カフェ');
+    if (tags.highway === 'rest_area') parts.push('休憩エリア');
+    if (tags.highway === 'services') parts.push('サービスエリア');
+    if (tags.amenity === 'public_bath') parts.push('温泉・銭湯');
+    if (tags.leisure === 'hot_spring') parts.push('温泉');
+    
+    if (tags.cuisine) parts.push(tags.cuisine);
+    if (tags.description) parts.push(tags.description);
+    if (tags.opening_hours) parts.push(`営業: ${tags.opening_hours}`);
+    
+    return parts.join(' / ');
 }
 
 // Load all spots
@@ -112,36 +290,38 @@ async function loadSpots() {
         const response = await fetch(url);
         spots = await response.json();
         
+        // Calculate distance if we have current location
+        if (currentLocation) {
+            spots = spots.map(spot => ({
+                ...spot,
+                distance: calculateDistance(
+                    currentLocation.lat, currentLocation.lng,
+                    spot.latitude, spot.longitude
+                )
+            }));
+            // Sort by distance
+            spots.sort((a, b) => a.distance - b.distance);
+        }
+        
         renderSpotsList();
         renderSpotMarkers();
     } catch (error) {
         console.error('Error loading spots:', error);
         document.getElementById('spots-container').innerHTML = 
-            '<p class="loading">\u30b9\u30dd\u30c3\u30c8\u306e\u8aad\u307f\u8fbc\u307f\u306b\u5931\u6557\u3057\u307e\u3057\u305f</p>';
+            '<p class="loading">スポットの読み込みに失敗しました</p>';
     }
 }
 
-// Load nearby spots
-async function loadNearbySpots() {
-    if (!currentLocation) return;
-    
-    try {
-        const response = await fetch(
-            `/api/nearby?lat=${currentLocation.lat}&lng=${currentLocation.lng}&limit=20`
-        );
-        const nearbySpots = await response.json();
-        
-        // Update spots with distance info
-        spots = nearbySpots.map(spot => ({
-            ...spot,
-            distance: spot.distance
-        }));
-        
-        renderSpotsList();
-        renderSpotMarkers();
-    } catch (error) {
-        console.error('Error loading nearby spots:', error);
-    }
+// Calculate distance between two points (Haversine formula)
+function calculateDistance(lat1, lon1, lat2, lon2) {
+    const R = 6371; // Earth's radius in km
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
 }
 
 // Render spots list in sidebar
@@ -153,7 +333,7 @@ function renderSpotsList() {
         : spots.filter(s => s.category === activeFilter);
     
     if (!filteredSpots || filteredSpots.length === 0) {
-        container.innerHTML = '<p class="loading">\u30b9\u30dd\u30c3\u30c8\u304c\u3042\u308a\u307e\u305b\u3093</p>';
+        container.innerHTML = '<p class="loading">スポットがありません<br><small>「周辺スポットを自動収集」で追加できます</small></p>';
         return;
     }
 
@@ -164,11 +344,11 @@ function renderSpotsList() {
             </span>
             <h3>${escapeHtml(spot.name)}</h3>
             ${spot.description ? `<p>${escapeHtml(spot.description)}</p>` : ''}
-            ${spot.distance ? `<p class="distance">\ud83d\udccd ${spot.distance.toFixed(1)} km</p>` : ''}
-            ${spot.rating > 0 ? `<p>\u2b50 ${spot.rating}</p>` : ''}
+            ${spot.distance !== undefined ? `<p class="distance">📍 ${spot.distance.toFixed(1)} km</p>` : ''}
+            ${spot.rating > 0 ? `<p>⭐ ${spot.rating}</p>` : ''}
             <div class="spot-actions">
                 <button class="btn btn-danger" onclick="event.stopPropagation(); deleteSpot(${spot.id})">
-                    \u524a\u9664
+                    削除
                 </button>
             </div>
         </div>
@@ -200,8 +380,8 @@ function renderSpotMarkers() {
                     <h3>${escapeHtml(spot.name)}</h3>
                     <p>${categoryIcons[spot.category]} ${categoryLabels[spot.category]}</p>
                     ${spot.description ? `<p>${escapeHtml(spot.description)}</p>` : ''}
-                    ${spot.address ? `<p>\ud83d\udccd ${escapeHtml(spot.address)}</p>` : ''}
-                    ${spot.rating > 0 ? `<p class="rating">\u2b50 ${spot.rating}</p>` : ''}
+                    ${spot.address ? `<p>📍 ${escapeHtml(spot.address)}</p>` : ''}
+                    ${spot.rating > 0 ? `<p class="rating">⭐ ${spot.rating}</p>` : ''}
                 </div>
             `);
         
@@ -224,7 +404,7 @@ function focusSpot(id) {
 
 // Delete a spot
 async function deleteSpot(id) {
-    if (!confirm('\u3053\u306e\u30b9\u30dd\u30c3\u30c8\u3092\u524a\u9664\u3057\u307e\u3059\u304b\uff1f')) return;
+    if (!confirm('このスポットを削除しますか？')) return;
 
     try {
         const response = await fetch(`/api/spots/${id}`, {
@@ -232,14 +412,35 @@ async function deleteSpot(id) {
         });
 
         if (response.ok) {
-            showNotification('\u30b9\u30dd\u30c3\u30c8\u3092\u524a\u9664\u3057\u307e\u3057\u305f');
+            showNotification('スポットを削除しました');
             loadSpots();
         } else {
             throw new Error('Failed to delete');
         }
     } catch (error) {
         console.error('Error deleting spot:', error);
-        showNotification('\u524a\u9664\u306b\u5931\u6557\u3057\u307e\u3057\u305f', true);
+        showNotification('削除に失敗しました', true);
+    }
+}
+
+// Clear all spots
+async function clearAllSpots() {
+    if (!confirm('すべてのスポットを削除しますか？\nこの操作は取り消せません。')) return;
+    
+    try {
+        const response = await fetch('/api/spots/clear', {
+            method: 'DELETE'
+        });
+        
+        if (response.ok) {
+            showNotification('すべてのスポットを削除しました');
+            loadSpots();
+        } else {
+            throw new Error('Failed to clear');
+        }
+    } catch (error) {
+        console.error('Error clearing spots:', error);
+        showNotification('削除に失敗しました', true);
     }
 }
 
@@ -247,6 +448,15 @@ async function deleteSpot(id) {
 function setupEventListeners() {
     // Refresh location button
     document.getElementById('refresh-location').addEventListener('click', getCurrentLocation);
+    
+    // Manual location set
+    document.getElementById('set-location-btn').addEventListener('click', setLocationManually);
+    
+    // Search spots button
+    document.getElementById('search-spots-btn').addEventListener('click', searchNearbySpots);
+    
+    // Clear all spots button
+    document.getElementById('clear-spots-btn').addEventListener('click', clearAllSpots);
 
     // Filter buttons
     document.querySelectorAll('.filter-btn').forEach(btn => {
@@ -283,7 +493,7 @@ function setupEventListeners() {
             document.getElementById('spot-lat').value = currentLocation.lat.toFixed(6);
             document.getElementById('spot-lng').value = currentLocation.lng.toFixed(6);
         } else {
-            showNotification('\u73fe\u5728\u5730\u304c\u53d6\u5f97\u3067\u304d\u3066\u3044\u307e\u305b\u3093', true);
+            showNotification('現在地が取得できていません', true);
         }
     });
 
@@ -292,7 +502,7 @@ function setupEventListeners() {
         pickingLocation = true;
         modal.style.display = 'none';
         map.getContainer().style.cursor = 'crosshair';
-        showNotification('\u5730\u56f3\u3092\u30af\u30ea\u30c3\u30af\u3057\u3066\u4f4d\u7f6e\u3092\u9078\u629e\u3057\u3066\u304f\u3060\u3055\u3044');
+        showNotification('地図をクリックして位置を選択してください');
     });
 
     // Add spot form
@@ -319,7 +529,7 @@ function setupEventListeners() {
             });
 
             if (response.ok) {
-                showNotification('\u30b9\u30dd\u30c3\u30c8\u3092\u8ffd\u52a0\u3057\u307e\u3057\u305f');
+                showNotification('スポットを追加しました');
                 modal.style.display = 'none';
                 e.target.reset();
                 loadSpots();
@@ -328,7 +538,7 @@ function setupEventListeners() {
             }
         } catch (error) {
             console.error('Error adding spot:', error);
-            showNotification('\u8ffd\u52a0\u306b\u5931\u6557\u3057\u307e\u3057\u305f', true);
+            showNotification('追加に失敗しました', true);
         }
     });
 }
