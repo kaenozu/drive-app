@@ -39,6 +39,8 @@ func New(dbPath, hostname string) (*Server, error) {
 
 func (s *Server) HandleRoot(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// Allow geolocation API
+	w.Header().Set("Permissions-Policy", "geolocation=(self)")
 	if err := s.renderTemplate(w, "index.html", nil); err != nil {
 		slog.Warn("render template", "url", r.URL.Path, "error", err)
 	}

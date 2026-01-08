@@ -53,36 +53,77 @@ function initMap() {
 // Get current location
 function getCurrentLocation() {
     const locationEl = document.getElementById('current-location');
-    
-    if (!navigator.geolocation) {
-        locationEl.innerHTML = '位置情報はサポートされていません<br><small>下の入力欄から手動設定できます</small>';
-        return;
-    }
-
     locationEl.textContent = '位置情報を取得中...';
 
-    navigator.geolocation.getCurrentPosition(
-        (position) => {
-            setCurrentLocation(position.coords.latitude, position.coords.longitude);
-        },
-        (error) => {
-            console.error('Geolocation error:', error);
-            let message = '位置情報を取得できませんでした';
-            if (error.code === 1) {
-                message = '位置情報の許可が必要です';
-            } else if (error.code === 2) {
-                message = '位置情報が利用できません';
-            } else if (error.code === 3) {
-                message = '位置情報の取得がタイムアウトしました';
+    // Try browser geolocation first
+    if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                setCurrentLocation(position.coords.latitude, position.coords.longitude);
+                showNotification('位置情報を取得しました');
+            },
+            (error) => {
+                console.error('Geolocation error:', error);
+                // Fallback to IP-based geolocation
+                getLocationByIP();
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 60000
             }
-            locationEl.innerHTML = `${message}<br><small>下の入力欄から手動設定できます</small>`;
-        },
-        {
-            enableHighAccuracy: true,
-            timeout: 10000,
-            maximumAge: 60000
+        );
+    } else {
+        // Fallback to IP-based geolocation
+        getLocationByIP();
+    }
+}
+
+// Fallback: Get location by IP address
+async function getLocationByIP() {
+    const locationEl = document.getElementById('current-location');
+    locationEl.textContent = 'IPアドレスから位置を推定中...';
+    
+    try {
+        // Try multiple IP geolocation services
+        let data = null;
+        
+        // Try ipapi.co first (no API key needed, 1000 requests/day)
+        try {
+            const response = await fetch('https://ipapi.co/json/', { timeout: 5000 });
+            if (response.ok) {
+                data = await response.json();
+                if (data.latitude && data.longitude) {
+                    setCurrentLocation(data.latitude, data.longitude);
+                    showNotification(`位置を推定しました (精度: 市区町村レベル)`);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.log('ipapi.co failed, trying alternative...');
         }
-    );
+        
+        // Try ip-api.com as backup (no API key, but HTTP only from browser)
+        try {
+            const response = await fetch('https://ipwho.is/', { timeout: 5000 });
+            if (response.ok) {
+                data = await response.json();
+                if (data.latitude && data.longitude) {
+                    setCurrentLocation(data.latitude, data.longitude);
+                    showNotification(`位置を推定しました (精度: 市区町村レベル)`);
+                    return;
+                }
+            }
+        } catch (e) {
+            console.log('ipwho.is failed');
+        }
+        
+        throw new Error('All IP geolocation services failed');
+        
+    } catch (error) {
+        console.error('IP geolocation error:', error);
+        locationEl.innerHTML = '位置情報を取得できませんでした<br><small>下の入力欄から手動設定してください</small>';
+    }
 }
 
 // Set current location (from geolocation or manual input)
