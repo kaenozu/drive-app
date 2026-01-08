@@ -5,8 +5,6 @@ let currentLocationMarker = null;
 let routeMarkers = [];
 let routeLine = null;
 let currentRoute = null;
-let selectedRating = 0;
-let feedbackSpotId = null;
 
 const categoryIcons = {
     start: '📍',
@@ -29,7 +27,7 @@ document.addEventListener('DOMContentLoaded', () => {
     initMap();
     getCurrentLocation();
     setupEventListeners();
-    loadHistory();
+    setDefaultTimes();
 });
 
 function initMap() {
@@ -37,6 +35,15 @@ function initMap() {
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
     }).addTo(map);
+}
+
+function setDefaultTimes() {
+    // Set departure to next hour
+    const now = new Date();
+    now.setHours(now.getHours() + 1, 0, 0, 0);
+    const hours = String(now.getHours()).padStart(2, '0');
+    document.getElementById('departure-time').value = `${hours}:00`;
+    updateTimeHint();
 }
 
 function getCurrentLocation() {
@@ -119,16 +126,45 @@ function setupEventListeners() {
     document.getElementById('generate-route-btn').addEventListener('click', generateRoute);
     document.getElementById('regenerate-btn')?.addEventListener('click', generateRoute);
     
-    // Rating stars
-    document.querySelectorAll('#rating-stars span').forEach(star => {
-        star.addEventListener('click', () => {
-            selectedRating = parseInt(star.dataset.rating);
-            updateStars();
-        });
+    // Time inputs
+    document.getElementById('departure-time').addEventListener('change', updateTimeHint);
+    document.getElementById('return-time').addEventListener('change', updateTimeHint);
+    document.getElementById('clear-return-time').addEventListener('click', () => {
+        document.getElementById('return-time').value = '';
+        updateTimeHint();
     });
+}
+
+function updateTimeHint() {
+    const departure = document.getElementById('departure-time').value;
+    const returnTime = document.getElementById('return-time').value;
+    const hintEl = document.getElementById('time-hint');
     
-    document.getElementById('submit-feedback').addEventListener('click', submitFeedback);
-    document.getElementById('cancel-feedback').addEventListener('click', closeFeedbackModal);
+    if (!departure) {
+        hintEl.textContent = '出発時刻を設定してください';
+        return;
+    }
+    
+    if (returnTime) {
+        const [dH, dM] = departure.split(':').map(Number);
+        const [rH, rM] = returnTime.split(':').map(Number);
+        const dMin = dH * 60 + dM;
+        const rMin = rH * 60 + rM;
+        const diff = rMin - dMin;
+        
+        if (diff <= 0) {
+            hintEl.textContent = '⚠️ 帰宅時刻は出発時刻より後にしてください';
+            hintEl.className = 'time-hint error';
+        } else {
+            const hours = Math.floor(diff / 60);
+            const mins = diff % 60;
+            hintEl.textContent = `🕐 ${hours}時間${mins > 0 ? mins + '分' : ''}のドライブコースを作成します`;
+            hintEl.className = 'time-hint';
+        }
+    } else {
+        hintEl.textContent = `🕐 ${departure}に出発、帰宅時刻は自由`;
+        hintEl.className = 'time-hint';
+    }
 }
 
 async function generateRoute() {
@@ -137,12 +173,17 @@ async function generateRoute() {
         return;
     }
     
+    const departure = document.getElementById('departure-time').value;
+    if (!departure) {
+        showNotification('出発時刻を設定してください', true);
+        return;
+    }
+    
     const btn = document.getElementById('generate-route-btn');
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner"></span> AIがルートを作成中...';
     
-    const maxDistance = parseFloat(document.getElementById('max-distance').value);
-    const maxTime = parseFloat(document.getElementById('max-time').value);
+    const returnTime = document.getElementById('return-time').value;
     const includeRestaurant = document.getElementById('include-restaurant').checked;
     const includeRest = document.getElementById('include-rest').checked;
     
@@ -153,8 +194,8 @@ async function generateRoute() {
             body: JSON.stringify({
                 lat: currentLocation.lat,
                 lng: currentLocation.lng,
-                max_distance_km: maxDistance,
-                max_time_hours: maxTime,
+                departure_time: departure,
+                return_time: returnTime || null,
                 include_restaurant: includeRestaurant,
                 include_rest: includeRest
             })
@@ -201,12 +242,16 @@ function renderRoute() {
     // Summary
     summaryEl.innerHTML = `
         <div class="summary-item">
-            <span class="label">総距離</span>
-            <span class="value">${currentRoute.total_distance_km.toFixed(1)} km</span>
+            <span class="label">出発</span>
+            <span class="value">${currentRoute.departure_time || '--:--'}</span>
         </div>
         <div class="summary-item">
-            <span class="label">総時間</span>
-            <span class="value">${formatTime(currentRoute.total_time_min)}</span>
+            <span class="label">帰着予定</span>
+            <span class="value">${currentRoute.estimated_return || '--:--'}</span>
+        </div>
+        <div class="summary-item">
+            <span class="label">総距離</span>
+            <span class="value">${currentRoute.total_distance_km.toFixed(1)} km</span>
         </div>
         <div class="summary-item">
             <span class="label">経由地</span>
@@ -226,11 +271,13 @@ function renderRoute() {
                 <div class="timeline-icon">${icon}</div>
                 <div class="timeline-content">
                     <div class="timeline-header">
+                        <span class="timeline-time">${stop.arrival_time || ''}</span>
                         <span class="timeline-label">${label}</span>
                         ${stop.distance_from_prev ? `<span class="timeline-distance">${stop.distance_from_prev.toFixed(1)}km</span>` : ''}
                     </div>
                     <div class="timeline-name">${escapeHtml(stop.name)}</div>
                     ${stop.description ? `<div class="timeline-desc">${escapeHtml(stop.description)}</div>` : ''}
+                    ${stop.stay_duration ? `<div class="timeline-stay">滞在: ${stop.stay_duration}分</div>` : ''}
                 </div>
             </div>
         `;
@@ -288,7 +335,7 @@ function renderRouteOnMap() {
         const marker = L.marker([stop.lat, stop.lng], { icon: markerIcon })
             .addTo(map)
             .bindPopup(`
-                <strong>${index + 1}. ${escapeHtml(stop.name)}</strong><br>
+                <strong>${stop.arrival_time || ''} ${escapeHtml(stop.name)}</strong><br>
                 ${icon} ${label}
                 ${stop.distance_from_prev ? `<br>前の地点から ${stop.distance_from_prev.toFixed(1)}km` : ''}
             `);
@@ -319,90 +366,6 @@ function formatTime(minutes) {
     const hours = Math.floor(minutes / 60);
     const mins = Math.round(minutes % 60);
     return mins > 0 ? `${hours}時間${mins}分` : `${hours}時間`;
-}
-
-function openFeedbackModal(spotId, spotName) {
-    feedbackSpotId = spotId;
-    selectedRating = 0;
-    updateStars();
-    document.getElementById('feedback-spot-name').textContent = spotName;
-    document.getElementById('feedback-comment').value = '';
-    document.getElementById('feedback-modal').style.display = 'flex';
-}
-
-function closeFeedbackModal() {
-    document.getElementById('feedback-modal').style.display = 'none';
-    feedbackSpotId = null;
-}
-
-function updateStars() {
-    document.querySelectorAll('#rating-stars span').forEach(star => {
-        const rating = parseInt(star.dataset.rating);
-        star.classList.toggle('active', rating <= selectedRating);
-    });
-}
-
-async function submitFeedback() {
-    if (!feedbackSpotId || selectedRating === 0) {
-        showNotification('評価を選択してください', true);
-        return;
-    }
-    
-    const comment = document.getElementById('feedback-comment').value;
-    
-    try {
-        const response = await fetch('/api/feedback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                spot_id: feedbackSpotId,
-                rating: selectedRating,
-                comment: comment
-            })
-        });
-        
-        if (!response.ok) throw new Error('API error');
-        
-        showNotification('評価を送信しました！');
-        closeFeedbackModal();
-        loadHistory();
-        
-    } catch (error) {
-        console.error('Feedback error:', error);
-        showNotification('送信に失敗しました', true);
-    }
-}
-
-async function loadHistory() {
-    try {
-        const response = await fetch('/api/history?limit=10');
-        if (!response.ok) throw new Error('API error');
-        
-        const history = await response.json();
-        
-        const section = document.getElementById('history-section');
-        const container = document.getElementById('history-container');
-        
-        if (!history || history.length === 0) {
-            section.style.display = 'none';
-            return;
-        }
-        
-        section.style.display = 'block';
-        container.innerHTML = history.map(item => `
-            <div class="history-item">
-                <span class="history-name">
-                    ${categoryIcons[item.spot_category] || ''} ${escapeHtml(item.spot_name)}
-                </span>
-                <span class="history-rating">
-                    ${item.rating ? '⭐'.repeat(item.rating) : '未評価'}
-                </span>
-            </div>
-        `).join('');
-        
-    } catch (error) {
-        console.error('History error:', error);
-    }
 }
 
 function escapeHtml(text) {

@@ -27,41 +27,35 @@
                 </button>
             </section>
 
-            <!-- Preference Section -->
-            <section class="card preference-card">
-                <h2>⚙️ 条件設定</h2>
-                <div class="form-group">
-                    <label for="max-distance">最大距離（総走行）</label>
-                    <select id="max-distance">
-                        <option value="50">50km</option>
-                        <option value="100" selected>100km</option>
-                        <option value="150">150km</option>
-                        <option value="200">200km</option>
-                        <option value="300">300km</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="max-time">最大所要時間（総計）</label>
-                    <select id="max-time">
-                        <option value="2">2時間</option>
-                        <option value="3">3時間</option>
-                        <option value="4" selected>4時間</option>
-                        <option value="6">6時間</option>
-                        <option value="8">8時間</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label>含めるスポット</label>
-                    <div class="checkbox-group">
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="include-restaurant" checked>
-                            🍽️ 食事
-                        </label>
-                        <label class="checkbox-label">
-                            <input type="checkbox" id="include-rest" checked>
-                            ☕ 休憩
-                        </label>
+            <!-- Time Section -->
+            <section class="card time-card">
+                <h2>⏰ 時間設定</h2>
+                <div class="time-inputs">
+                    <div class="form-group">
+                        <label for="departure-time">出発時刻</label>
+                        <input type="time" id="departure-time" value="10:00">
                     </div>
+                    <div class="form-group">
+                        <label for="return-time">帰宅時刻（任意）</label>
+                        <input type="time" id="return-time" placeholder="未設定">
+                        <button type="button" id="clear-return-time" class="btn-clear">×</button>
+                    </div>
+                </div>
+                <p class="time-hint" id="time-hint">出発時刻を設定してください</p>
+            </section>
+
+            <!-- Options Section -->
+            <section class="card options-card">
+                <h2>⚙️ オプション</h2>
+                <div class="checkbox-group">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="include-restaurant" checked>
+                        🍽️ 食事を含める
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="include-rest" checked>
+                        ☕ 休憩を含める
+                    </label>
                 </div>
             </section>
 
@@ -93,40 +87,8 @@
                 <h2>🗺️ 地図</h2>
                 <div id="map"></div>
             </section>
-
-            <!-- History -->
-            <section id="history-section" class="card history-card" style="display:none;">
-                <h2>📝 過去のドライブ</h2>
-                <div id="history-container"></div>
-            </section>
         </div>
     </main>
-
-    <!-- Feedback Modal -->
-    <div id="feedback-modal" class="modal" style="display:none;">
-        <div class="modal-content">
-            <h3>📝 ドライブの感想</h3>
-            <p id="feedback-spot-name"></p>
-            <div class="rating-input">
-                <label>評価:</label>
-                <div class="stars" id="rating-stars">
-                    <span data-rating="1">⭐</span>
-                    <span data-rating="2">⭐</span>
-                    <span data-rating="3">⭐</span>
-                    <span data-rating="4">⭐</span>
-                    <span data-rating="5">⭐</span>
-                </div>
-            </div>
-            <div class="form-group">
-                <label for="feedback-comment">コメント（任意）</label>
-                <textarea id="feedback-comment" rows="3" placeholder="感想を書いてください..."></textarea>
-            </div>
-            <div class="modal-buttons">
-                <button id="submit-feedback" class="btn btn-primary">送信</button>
-                <button id="cancel-feedback" class="btn btn-secondary">キャンセル</button>
-            </div>
-        </div>
-    </div>
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="/static/app.js"></script>

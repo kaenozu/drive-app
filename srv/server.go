@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"srv.exe.dev/db"
@@ -437,25 +438,28 @@ func callClaudeAPI(prompt string) ([]int64, string) {
 	return aiResp.SpotIDs, aiResp.Message
 }
 
+
 // RouteRequest is the request for route generation
 type RouteRequest struct {
 	Lat               float64 `json:"lat"`
 	Lng               float64 `json:"lng"`
-	MaxDistanceKm     float64 `json:"max_distance_km"`
-	MaxTimeHours      float64 `json:"max_time_hours"`
+	DepartureTime     string  `json:"departure_time"`     // "HH:MM"
+	ReturnTime        string  `json:"return_time"`        // "HH:MM" optional
 	IncludeRestaurant bool    `json:"include_restaurant"`
 	IncludeRest       bool    `json:"include_rest"`
 }
 
 // RouteStop represents a stop in the route
 type RouteStop struct {
-	ID               int64    `json:"id"`
-	Name             string   `json:"name"`
-	Description      string   `json:"description,omitempty"`
-	Category         string   `json:"category"`
-	Lat              float64  `json:"lat"`
-	Lng              float64  `json:"lng"`
-	DistanceFromPrev float64  `json:"distance_from_prev,omitempty"`
+	ID               int64   `json:"id"`
+	Name             string  `json:"name"`
+	Description      string  `json:"description,omitempty"`
+	Category         string  `json:"category"`
+	Lat              float64 `json:"lat"`
+	Lng              float64 `json:"lng"`
+	DistanceFromPrev float64 `json:"distance_from_prev,omitempty"`
+	ArrivalTime      string  `json:"arrival_time,omitempty"`
+	StayDuration     int     `json:"stay_duration,omitempty"` // minutes
 }
 
 // RouteResponse is the response containing the full route
@@ -463,6 +467,8 @@ type RouteResponse struct {
 	Stops           []RouteStop `json:"stops"`
 	TotalDistanceKm float64     `json:"total_distance_km"`
 	TotalTimeMin    float64     `json:"total_time_min"`
+	DepartureTime   string      `json:"departure_time"`
+	EstimatedReturn string      `json:"estimated_return"`
 	Message         string      `json:"message"`
 }
 
@@ -476,15 +482,32 @@ func (s *Server) HandleGenerateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.MaxDistanceKm == 0 {
-		req.MaxDistanceKm = 100
+	if req.DepartureTime == "" {
+		req.DepartureTime = "10:00"
 	}
-	if req.MaxTimeHours == 0 {
-		req.MaxTimeHours = 4
+
+	// Calculate available time
+	availableHours := 8.0 // default: 8 hours
+	if req.ReturnTime != "" {
+		depMin := parseTimeToMinutes(req.DepartureTime)
+		retMin := parseTimeToMinutes(req.ReturnTime)
+		if retMin > depMin {
+			availableHours = float64(retMin-depMin) / 60
+		}
 	}
+
+	// Max distance based on available time (avg 40km/h, half time for stops)
+	maxDistanceKm := availableHours * 40 * 0.5
 
 	q := dbgen.New(s.DB)
 	_, _ = q.GetOrCreateUser(r.Context(), userID)
+
+	// Get recent route hashes to avoid repetition
+	recentHashes, _ := q.GetRecentRouteHashes(r.Context(), userID)
+	recentHashSet := make(map[string]bool)
+	for _, h := range recentHashes {
+		recentHashSet[h] = true
+	}
 
 	// Get all spots
 	allSpots, err := q.GetAllSpots(r.Context())
@@ -493,10 +516,15 @@ func (s *Server) HandleGenerateRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Filter by distance (use half of max distance as radius for one-way)
-	maxOneWayDist := req.MaxDistanceKm / 3 // rough estimate for round trip with stops
+	// Shuffle spots to add randomness
+	shuffleSpots(allSpots)
+
+	// Filter by distance
+	maxOneWayDist := maxDistanceKm / 3
 
 	var driveSpots, restaurants, restSpots []dbgen.Spot
+	depMinutes := parseTimeToMinutes(req.DepartureTime)
+
 	for _, spot := range allSpots {
 		dist := haversine(req.Lat, req.Lng, spot.Latitude, spot.Longitude)
 		if dist > maxOneWayDist {
@@ -521,35 +549,96 @@ func (s *Server) HandleGenerateRoute(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(RouteResponse{
 			Stops:   []RouteStop{},
-			Message: "条件に合うドライブスポットが見つかりませんでした。距離の条件を緩めてみてください。",
+			Message: "条件に合うドライブスポットが見つかりませんでした。",
 		})
 		return
 	}
 
 	// Use AI to build optimal route
-	route, message := s.buildRouteWithAI(req.Lat, req.Lng, driveSpots, restaurants, restSpots, req)
+	route, message := s.buildRouteWithAI(req.Lat, req.Lng, driveSpots, restaurants, restSpots, req, depMinutes, availableHours, recentHashSet)
+
+	// Save route hash to history
+	if len(route.Stops) > 2 {
+		var ids []int64
+		for _, stop := range route.Stops {
+			if stop.ID > 0 {
+				ids = append(ids, stop.ID)
+			}
+		}
+		if len(ids) > 0 {
+			hash := computeRouteHash(ids)
+			idsJSON, _ := json.Marshal(ids)
+			q.AddRouteHistory(r.Context(), dbgen.AddRouteHistoryParams{
+				UserID:    userID,
+				RouteHash: hash,
+				SpotIds:   string(idsJSON),
+			})
+		}
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(RouteResponse{
 		Stops:           route.Stops,
 		TotalDistanceKm: route.TotalDistanceKm,
 		TotalTimeMin:    route.TotalTimeMin,
+		DepartureTime:   req.DepartureTime,
+		EstimatedReturn: route.EstimatedReturn,
 		Message:         message,
 	})
+}
+
+func parseTimeToMinutes(t string) int {
+	parts := strings.Split(t, ":")
+	if len(parts) != 2 {
+		return 0
+	}
+	h, _ := strconv.Atoi(parts[0])
+	m, _ := strconv.Atoi(parts[1])
+	return h*60 + m
+}
+
+func minutesToTime(m int) string {
+	h := m / 60
+	min := m % 60
+	return fmt.Sprintf("%02d:%02d", h, min)
+}
+
+func shuffleSpots(spots []dbgen.Spot) {
+	for i := len(spots) - 1; i > 0; i-- {
+		j := int(time.Now().UnixNano()) % (i + 1)
+		spots[i], spots[j] = spots[j], spots[i]
+	}
+}
+
+func computeRouteHash(ids []int64) string {
+	// Sort and create hash
+	sorted := make([]int64, len(ids))
+	copy(sorted, ids)
+	for i := 0; i < len(sorted)-1; i++ {
+		for j := i + 1; j < len(sorted); j++ {
+			if sorted[i] > sorted[j] {
+				sorted[i], sorted[j] = sorted[j], sorted[i]
+			}
+		}
+	}
+	return fmt.Sprintf("%v", sorted)
 }
 
 type builtRoute struct {
 	Stops           []RouteStop
 	TotalDistanceKm float64
 	TotalTimeMin    float64
+	EstimatedReturn string
 }
 
-func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restaurants, restSpots []dbgen.Spot, req RouteRequest) (builtRoute, string) {
-	// Build candidate list for AI
+func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restaurants, restSpots []dbgen.Spot, req RouteRequest, depMinutes int, availableHours float64, recentHashes map[string]bool) (builtRoute, string) {
+	// Build candidate list for AI with randomness indicator
+	randomSeed := time.Now().UnixNano() % 1000
+	
 	var candidateList string
 	candidateList += "ドライブスポット:\n"
 	for i, spot := range driveSpots {
-		if i >= 15 {
+		if i >= 20 {
 			break
 		}
 		dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
@@ -563,7 +652,7 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 	if len(restaurants) > 0 {
 		candidateList += "\n食事スポット:\n"
 		for i, spot := range restaurants {
-			if i >= 10 {
+			if i >= 15 {
 				break
 			}
 			dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
@@ -578,7 +667,7 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 	if len(restSpots) > 0 {
 		candidateList += "\n休憩スポット:\n"
 		for i, spot := range restSpots {
-			if i >= 10 {
+			if i >= 15 {
 				break
 			}
 			dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
@@ -590,61 +679,73 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 		}
 	}
 
+	// Build list of recent routes to avoid
+	var avoidList string
+	if len(recentHashes) > 0 {
+		avoidList = "\n※最近提案したルートと同じ組み合わせは避けてください。\n"
+	}
+
 	prompt := fmt.Sprintf(`あなたはドライブルートのプランナーAIです。
 現在地から出発して、いくつかのスポットを経由して現在地に戻る周遊ドライブルートを作成してください。
 
+【基本情報】
 現在地: 緯度%.4f, 経度%.4f
-総走行距離の目安: %.0fkm以内
-総所要時間の目安: %.0f時間以内
-
-候補スポット:
+出発時刻: %s
+使える時間: 約%.1f時間
+ランダムシード: %d（毎回異なるルートを提案するため）
 %s
-
-要件:
-1. メインの目的地（ドライブスポット）を1〜2箇所選ぶ
-2. 食事スポットがあれば1箇所を途中に組み込む
-3. 休憩スポットがあれば1箇所を組み込む（任意）
-4. 効率的なルート順序にする（行って戻る、無駄な迂回をしない）
+【候補スポット】
+%s
+【要件】
+1. メインの目的地（ドライブスポット）を1〜3箇所選ぶ
+2. 食事スポットがあれば、昼食時間帯（11:30-13:30頃）に1箇所組み込む
+3. 休憩スポットがあれば適宜組み込む（長距離の場合）
+4. 効率的で無駄のないルート順序にする
 5. 出発地と帰着地は同じ（現在地）
+6. 各スポットの滞在時間目安: ドライブスポット30-60分、食事45-60分、休憩15-30分
+7. **前回と違うルートを提案してください**
 
-以下のJSON形式で回答してください:
+【出力形式】JSON形式で回答:
 {
   "route_ids": [スポットIDを訪問順に配列。出発地・帰着地は含めない],
-  "message": "このルートの特徴や楽しみ方を2文程度で説明"
+  "stay_durations": [各スポットの滞在時間（分）を対応する順番で配列],
+  "message": "このルートの特徴や楽しみ方を2文程度で"
 }
-`, startLat, startLng, req.MaxDistanceKm, req.MaxTimeHours, candidateList)
+`, startLat, startLng, req.DepartureTime, availableHours, randomSeed, avoidList, candidateList)
 
 	// Call Claude API
-	routeIDs, message := callClaudeAPIForRoute(prompt)
+	routeIDs, stayDurations, message := callClaudeAPIForRouteV2(prompt)
 
 	// Build spot map
 	spotMap := make(map[int64]dbgen.Spot)
-	for _, s := range driveSpots {
-		spotMap[s.ID] = s
+	for _, sp := range driveSpots {
+		spotMap[sp.ID] = sp
 	}
-	for _, s := range restaurants {
-		spotMap[s.ID] = s
+	for _, sp := range restaurants {
+		spotMap[sp.ID] = sp
 	}
-	for _, s := range restSpots {
-		spotMap[s.ID] = s
+	for _, sp := range restSpots {
+		spotMap[sp.ID] = sp
 	}
 
-	// Build route with start and end
+	// Build route with times
 	var stops []RouteStop
 	var totalDist float64
+	currentTime := depMinutes
 
 	// Start point
 	stops = append(stops, RouteStop{
-		ID:       0,
-		Name:     "現在地",
-		Category: "start",
-		Lat:      startLat,
-		Lng:      startLng,
+		ID:          0,
+		Name:        "現在地",
+		Category:    "start",
+		Lat:         startLat,
+		Lng:         startLng,
+		ArrivalTime: minutesToTime(currentTime),
 	})
 
 	prevLat, prevLng := startLat, startLng
 
-	for _, id := range routeIDs {
+	for i, id := range routeIDs {
 		spot, ok := spotMap[id]
 		if !ok {
 			continue
@@ -652,9 +753,28 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 		dist := haversine(prevLat, prevLng, spot.Latitude, spot.Longitude)
 		totalDist += dist
 
+		// Travel time (40km/h average)
+		travelMin := int(dist / 40 * 60)
+		currentTime += travelMin
+
 		desc := ""
 		if spot.Description != nil {
 			desc = *spot.Description
+		}
+
+		// Get stay duration
+		stayMin := 30 // default
+		if i < len(stayDurations) {
+			stayMin = stayDurations[i]
+		} else {
+			switch spot.Category {
+			case "restaurant":
+				stayMin = 50
+			case "rest":
+				stayMin = 20
+			case "drive":
+				stayMin = 40
+			}
 		}
 
 		stops = append(stops, RouteStop{
@@ -665,14 +785,19 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 			Lat:              spot.Latitude,
 			Lng:              spot.Longitude,
 			DistanceFromPrev: math.Round(dist*10) / 10,
+			ArrivalTime:      minutesToTime(currentTime),
+			StayDuration:     stayMin,
 		})
 
+		currentTime += stayMin
 		prevLat, prevLng = spot.Latitude, spot.Longitude
 	}
 
 	// Return to start
 	returnDist := haversine(prevLat, prevLng, startLat, startLng)
 	totalDist += returnDist
+	returnTravelMin := int(returnDist / 40 * 60)
+	currentTime += returnTravelMin
 
 	stops = append(stops, RouteStop{
 		ID:               0,
@@ -681,53 +806,51 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 		Lat:              startLat,
 		Lng:              startLng,
 		DistanceFromPrev: math.Round(returnDist*10) / 10,
+		ArrivalTime:      minutesToTime(currentTime),
 	})
 
-	// Estimate time (40km/h average + 30min per stop)
-	numStops := len(stops) - 2 // exclude start and end
-	totalTimeMin := (totalDist / 40 * 60) + float64(numStops*30)
+	totalTimeMin := float64(currentTime - depMinutes)
 
 	// Fallback if AI didn't return valid route
-	if len(stops) <= 2 {
-		// Simple fallback: pick closest drive spot
-		if len(driveSpots) > 0 {
-			closest := driveSpots[0]
-			closestDist := haversine(startLat, startLng, closest.Latitude, closest.Longitude)
-			for _, s := range driveSpots[1:] {
-				d := haversine(startLat, startLng, s.Latitude, s.Longitude)
-				if d < closestDist {
-					closest = s
-					closestDist = d
-				}
-			}
+	if len(stops) <= 2 && len(driveSpots) > 0 {
+		// Pick a random drive spot
+		idx := int(time.Now().UnixNano()) % len(driveSpots)
+		spot := driveSpots[idx]
+		dist := haversine(startLat, startLng, spot.Latitude, spot.Longitude)
 
-			desc := ""
-			if closest.Description != nil {
-				desc = *closest.Description
-			}
-
-			stops = []RouteStop{
-				{ID: 0, Name: "現在地", Category: "start", Lat: startLat, Lng: startLng},
-				{ID: closest.ID, Name: closest.Name, Description: desc, Category: closest.Category, Lat: closest.Latitude, Lng: closest.Longitude, DistanceFromPrev: math.Round(closestDist*10) / 10},
-				{ID: 0, Name: "現在地", Category: "end", Lat: startLat, Lng: startLng, DistanceFromPrev: math.Round(closestDist*10) / 10},
-			}
-			totalDist = closestDist * 2
-			totalTimeMin = (totalDist / 40 * 60) + 30
-			message = "最寄りのドライブスポットをおすすめします。"
+		desc := ""
+		if spot.Description != nil {
+			desc = *spot.Description
 		}
+
+		travelMin := int(dist / 40 * 60)
+		arriveTime := depMinutes + travelMin
+		stayMin := 40
+		returnTime := arriveTime + stayMin + travelMin
+
+		stops = []RouteStop{
+			{ID: 0, Name: "現在地", Category: "start", Lat: startLat, Lng: startLng, ArrivalTime: minutesToTime(depMinutes)},
+			{ID: spot.ID, Name: spot.Name, Description: desc, Category: spot.Category, Lat: spot.Latitude, Lng: spot.Longitude, DistanceFromPrev: math.Round(dist*10) / 10, ArrivalTime: minutesToTime(arriveTime), StayDuration: stayMin},
+			{ID: 0, Name: "現在地", Category: "end", Lat: startLat, Lng: startLng, DistanceFromPrev: math.Round(dist*10) / 10, ArrivalTime: minutesToTime(returnTime)},
+		}
+		totalDist = dist * 2
+		totalTimeMin = float64(returnTime - depMinutes)
+		message = "おすすめのドライブスポットを選びました。"
+		currentTime = returnTime
 	}
 
 	return builtRoute{
 		Stops:           stops,
 		TotalDistanceKm: math.Round(totalDist*10) / 10,
 		TotalTimeMin:    math.Round(totalTimeMin),
+		EstimatedReturn: minutesToTime(currentTime),
 	}, message
 }
 
-func callClaudeAPIForRoute(prompt string) ([]int64, string) {
+func callClaudeAPIForRouteV2(prompt string) ([]int64, []int, string) {
 	reqBody := map[string]interface{}{
 		"model":      "claude-sonnet-4-20250514",
-		"max_tokens": 500,
+		"max_tokens": 600,
 		"messages": []map[string]string{
 			{"role": "user", "content": prompt},
 		},
@@ -742,7 +865,7 @@ func callClaudeAPIForRoute(prompt string) ([]int64, string) {
 	resp, err := client.Do(req)
 	if err != nil {
 		slog.Error("Claude API error", "error", err)
-		return nil, ""
+		return nil, nil, ""
 	}
 	defer resp.Body.Close()
 
@@ -755,11 +878,11 @@ func callClaudeAPIForRoute(prompt string) ([]int64, string) {
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
 		slog.Error("Parse Claude response", "error", err, "body", string(body))
-		return nil, ""
+		return nil, nil, ""
 	}
 
 	if len(result.Content) == 0 {
-		return nil, ""
+		return nil, nil, ""
 	}
 
 	text := result.Content[0].Text
@@ -777,19 +900,20 @@ func callClaudeAPIForRoute(prompt string) ([]int64, string) {
 	}
 
 	if start == -1 || end == -1 {
-		return nil, ""
+		return nil, nil, ""
 	}
 
 	var aiResp struct {
-		RouteIDs []int64 `json:"route_ids"`
-		Message  string  `json:"message"`
+		RouteIDs      []int64 `json:"route_ids"`
+		StayDurations []int   `json:"stay_durations"`
+		Message       string  `json:"message"`
 	}
 	if err := json.Unmarshal([]byte(text[start:end]), &aiResp); err != nil {
 		slog.Error("Parse AI route JSON", "error", err, "text", text)
-		return nil, ""
+		return nil, nil, ""
 	}
 
-	return aiResp.RouteIDs, aiResp.Message
+	return aiResp.RouteIDs, aiResp.StayDurations, aiResp.Message
 }
 
 // Haversine formula for distance calculation

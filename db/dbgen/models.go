@@ -12,6 +12,7 @@ type Favorite struct {
 	ID        int64     `json:"id"`
 	UserID    string    `json:"user_id"`
 	SpotID    int64     `json:"spot_id"`
+	Note      *string   `json:"note"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -29,6 +30,14 @@ type RecommendationHistory struct {
 	WasAccepted   *bool     `json:"was_accepted"`
 }
 
+type RouteHistory struct {
+	ID        int64     `json:"id"`
+	UserID    string    `json:"user_id"`
+	RouteHash string    `json:"route_hash"`
+	SpotIds   string    `json:"spot_ids"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
 type Spot struct {
 	ID          int64     `json:"id"`
 	Name        string    `json:"name"`
@@ -41,6 +50,9 @@ type Spot struct {
 	Rating      *float64  `json:"rating"`
 	CreatedAt   time.Time `json:"created_at"`
 	CreatedBy   *string   `json:"created_by"`
+	OpeningTime *string   `json:"opening_time"`
+	ClosingTime *string   `json:"closing_time"`
+	ClosedDays  *string   `json:"closed_days"`
 }
 
 type User struct {
@@ -57,6 +69,14 @@ type UserPreference struct {
 	PreferredTimeHours  *float64  `json:"preferred_time_hours"`
 	AvoidCategories     *string   `json:"avoid_categories"`
 	UpdatedAt           time.Time `json:"updated_at"`
+}
+
+type UserSession struct {
+	ID        int64     `json:"id"`
+	UserID    string    `json:"user_id"`
+	Mood      *string   `json:"mood"`
+	Companion *string   `json:"companion"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type VisitHistory struct {
