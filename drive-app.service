@@ -1,0 +1,14 @@
+[Unit]
+Description=Drive Spot Finder App
+After=network.target
+
+[Service]
+Type=simple
+User=exedev
+WorkingDirectory=/home/exedev/drive-app
+ExecStart=/home/exedev/drive-app/drive-app -listen :8000
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
