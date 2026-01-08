@@ -3,7 +3,6 @@ let map;
 let currentLocation = null;
 let currentLocationMarker = null;
 let spotMarkers = [];
-let pickingLocation = false;
 let spots = [];
 let activeFilter = 'all';
 let isSearching = false;
@@ -38,19 +37,10 @@ function initMap() {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
     }).addTo(map);
 
-    // Click handler for picking location
+    // Click handler for setting location
     map.on('click', (e) => {
-        if (pickingLocation) {
-            document.getElementById('spot-lat').value = e.latlng.lat.toFixed(6);
-            document.getElementById('spot-lng').value = e.latlng.lng.toFixed(6);
-            pickingLocation = false;
-            map.getContainer().style.cursor = '';
-            showNotification('位置を選択しました');
-        } else {
-            // Set current location by clicking map
-            setCurrentLocation(e.latlng.lat, e.latlng.lng);
-            showNotification('位置を設定しました');
-        }
+        setCurrentLocation(e.latlng.lat, e.latlng.lng);
+        showNotification('位置を設定しました');
     });
 }
 
@@ -578,11 +568,6 @@ function renderSpotsList() {
             ${spot.description ? `<p>${escapeHtml(spot.description)}</p>` : ''}
             ${spot.distance !== undefined ? `<p class="distance">📍 ${spot.distance.toFixed(1)} km</p>` : ''}
             ${spot.rating > 0 ? `<p>⭐ ${spot.rating}</p>` : ''}
-            <div class="spot-actions">
-                <button class="btn btn-danger" onclick="event.stopPropagation(); deleteSpot(${spot.id})">
-                    削除
-                </button>
-            </div>
         </div>
     `).join('');
 }
@@ -634,48 +619,6 @@ function focusSpot(id) {
     }
 }
 
-// Delete a spot
-async function deleteSpot(id) {
-    if (!confirm('このスポットを削除しますか？')) return;
-
-    try {
-        const response = await fetch(`/api/spots/${id}`, {
-            method: 'DELETE'
-        });
-
-        if (response.ok) {
-            showNotification('スポットを削除しました');
-            loadSpots();
-        } else {
-            throw new Error('Failed to delete');
-        }
-    } catch (error) {
-        console.error('Error deleting spot:', error);
-        showNotification('削除に失敗しました', true);
-    }
-}
-
-// Clear all spots
-async function clearAllSpots() {
-    if (!confirm('すべてのスポットを削除しますか？\nこの操作は取り消せません。')) return;
-    
-    try {
-        const response = await fetch('/api/spots/clear', {
-            method: 'DELETE'
-        });
-        
-        if (response.ok) {
-            showNotification('すべてのスポットを削除しました');
-            loadSpots();
-        } else {
-            throw new Error('Failed to clear');
-        }
-    } catch (error) {
-        console.error('Error clearing spots:', error);
-        showNotification('削除に失敗しました', true);
-    }
-}
-
 // Setup event listeners
 function setupEventListeners() {
     // Refresh location button
@@ -683,9 +626,6 @@ function setupEventListeners() {
     
     // Search spots button
     document.getElementById('search-spots-btn').addEventListener('click', searchNearbySpots);
-    
-    // Clear all spots button
-    document.getElementById('clear-spots-btn').addEventListener('click', clearAllSpots);
 
     // Filter buttons
     document.querySelectorAll('.filter-btn').forEach(btn => {
@@ -697,79 +637,6 @@ function setupEventListeners() {
         });
     });
 
-    // Add spot modal
-    const modal = document.getElementById('add-spot-modal');
-    const addBtn = document.getElementById('add-spot-btn');
-    const closeBtn = modal.querySelector('.close');
-
-    addBtn.addEventListener('click', () => {
-        modal.style.display = 'block';
-    });
-
-    closeBtn.addEventListener('click', () => {
-        modal.style.display = 'none';
-    });
-
-    window.addEventListener('click', (e) => {
-        if (e.target === modal) {
-            modal.style.display = 'none';
-        }
-    });
-
-    // Use current location button
-    document.getElementById('use-current-location').addEventListener('click', () => {
-        if (currentLocation) {
-            document.getElementById('spot-lat').value = currentLocation.lat.toFixed(6);
-            document.getElementById('spot-lng').value = currentLocation.lng.toFixed(6);
-        } else {
-            showNotification('現在地が取得できていません', true);
-        }
-    });
-
-    // Pick on map button
-    document.getElementById('pick-on-map').addEventListener('click', () => {
-        pickingLocation = true;
-        modal.style.display = 'none';
-        map.getContainer().style.cursor = 'crosshair';
-        showNotification('地図をクリックして位置を選択してください');
-    });
-
-    // Add spot form
-    document.getElementById('add-spot-form').addEventListener('submit', async (e) => {
-        e.preventDefault();
-        
-        const spotData = {
-            name: document.getElementById('spot-name').value,
-            category: document.getElementById('spot-category').value,
-            description: document.getElementById('spot-description').value,
-            address: document.getElementById('spot-address').value,
-            latitude: parseFloat(document.getElementById('spot-lat').value),
-            longitude: parseFloat(document.getElementById('spot-lng').value),
-            rating: parseFloat(document.getElementById('spot-rating').value) || 0
-        };
-
-        try {
-            const response = await fetch('/api/spots', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(spotData)
-            });
-
-            if (response.ok) {
-                showNotification('スポットを追加しました');
-                modal.style.display = 'none';
-                e.target.reset();
-                loadSpots();
-            } else {
-                throw new Error('Failed to add spot');
-            }
-        } catch (error) {
-            console.error('Error adding spot:', error);
-            showNotification('追加に失敗しました', true);
-        }
-    });
 }
 
 // Helper functions

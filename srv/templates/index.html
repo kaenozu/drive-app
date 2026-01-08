@@ -67,65 +67,7 @@
                         <p class="loading">スポットを読み込み中...</p>
                     </div>
                 </div>
-
-                <div class="add-spot-section">
-                    <h2>➕ スポットを追加</h2>
-                    <button id="add-spot-btn" class="btn btn-success">
-                        新しいスポットを手動追加
-                    </button>
-                    <button id="clear-spots-btn" class="btn btn-danger-outline">
-                        🗑️ 全スポットを削除
-                    </button>
-                </div>
             </div>
-        </div>
-    </div>
-
-    <!-- Add Spot Modal -->
-    <div id="add-spot-modal" class="modal">
-        <div class="modal-content">
-            <span class="close">&times;</span>
-            <h2>新しいスポットを追加</h2>
-            <form id="add-spot-form">
-                <div class="form-group">
-                    <label for="spot-name">スポット名 *</label>
-                    <input type="text" id="spot-name" required>
-                </div>
-                <div class="form-group">
-                    <label for="spot-category">カテゴリ *</label>
-                    <select id="spot-category" required>
-                        <option value="drive">🛣️ ドライブスポット</option>
-                        <option value="restaurant">🍽️ レストラン・食事処</option>
-                        <option value="rest">☕ 休憩スポット</option>
-                    </select>
-                </div>
-                <div class="form-group">
-                    <label for="spot-description">説明</label>
-                    <textarea id="spot-description" rows="3"></textarea>
-                </div>
-                <div class="form-group">
-                    <label for="spot-address">住所</label>
-                    <input type="text" id="spot-address">
-                </div>
-                <div class="form-group location-picker">
-                    <label>位置 *</label>
-                    <div class="coordinates">
-                        <input type="number" id="spot-lat" step="any" placeholder="緯度" required>
-                        <input type="number" id="spot-lng" step="any" placeholder="経度" required>
-                    </div>
-                    <button type="button" id="use-current-location" class="btn btn-secondary">
-                        現在地を使用
-                    </button>
-                    <button type="button" id="pick-on-map" class="btn btn-secondary">
-                        地図で選択
-                    </button>
-                </div>
-                <div class="form-group">
-                    <label for="spot-rating">評価 (0-5)</label>
-                    <input type="number" id="spot-rating" min="0" max="5" step="0.5" value="0">
-                </div>
-                <button type="submit" class="btn btn-primary">追加する</button>
-            </form>
         </div>
     </div>
 
