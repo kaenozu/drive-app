@@ -82,6 +82,8 @@ func (s *Server) Serve(addr string) error {
 	mux.HandleFunc("GET /api/spots", s.HandleGetSpots)
 	mux.HandleFunc("POST /api/recommend", s.HandleRecommend)
 	mux.HandleFunc("POST /api/route", s.HandleGenerateRoute)
+	mux.HandleFunc("POST /api/route/modify", s.HandleModifyRoute)
+	mux.HandleFunc("POST /api/alternatives", s.HandleGetAlternatives)
 	mux.HandleFunc("POST /api/feedback", s.HandleFeedback)
 	mux.HandleFunc("GET /api/history", s.HandleGetHistory)
 	mux.HandleFunc("POST /api/accept", s.HandleAcceptRecommendation)
@@ -1086,4 +1088,212 @@ func (s *Server) HandleGetHistory(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(history)
+}
+
+// AlternativesRequest is the request for getting alternative spots
+type AlternativesRequest struct {
+	Lat             float64 `json:"lat"`
+	Lng             float64 `json:"lng"`
+	Category        string  `json:"category"`
+	ExcludeID       int64   `json:"exclude_id"`
+	CurrentRouteIDs []int64 `json:"current_route_ids"`
+}
+
+// AlternativeSpot is a candidate spot for replacement
+type AlternativeSpot struct {
+	ID         int64   `json:"id"`
+	Name       string  `json:"name"`
+	Category   string  `json:"category"`
+	DistanceKm float64 `json:"distance_km"`
+	Direction  string  `json:"direction"`
+}
+
+// HandleGetAlternatives returns alternative spots for a given category
+func (s *Server) HandleGetAlternatives(w http.ResponseWriter, r *http.Request) {
+	var req AlternativesRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	q := dbgen.New(s.DB)
+	allSpots, err := q.GetAllSpots(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Build set of IDs to exclude
+	excludeSet := make(map[int64]bool)
+	excludeSet[req.ExcludeID] = true
+	for _, id := range req.CurrentRouteIDs {
+		excludeSet[id] = true
+	}
+
+	var alternatives []AlternativeSpot
+	for _, spot := range allSpots {
+		if excludeSet[spot.ID] {
+			continue
+		}
+		if spot.Category != req.Category {
+			continue
+		}
+
+		dist := haversine(req.Lat, req.Lng, spot.Latitude, spot.Longitude)
+		if dist > 50 { // max 50km
+			continue
+		}
+
+		alternatives = append(alternatives, AlternativeSpot{
+			ID:         spot.ID,
+			Name:       spot.Name,
+			Category:   spot.Category,
+			DistanceKm: math.Round(dist*10) / 10,
+			Direction:  getDirection(req.Lat, req.Lng, spot.Latitude, spot.Longitude),
+		})
+
+		if len(alternatives) >= 5 {
+			break
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(alternatives)
+}
+
+// ModifyRouteRequest is the request for modifying a route
+type ModifyRouteRequest struct {
+	Lat           float64 `json:"lat"`
+	Lng           float64 `json:"lng"`
+	DepartureTime string  `json:"departure_time"`
+	ReturnTime    string  `json:"return_time"`
+	CurrentRoute  []struct {
+		ID           int64  `json:"id"`
+		Category     string `json:"category"`
+		StayDuration int    `json:"stay_duration"`
+	} `json:"current_route"`
+	Action   string `json:"action"` // "skip" or "replace"
+	TargetID int64  `json:"target_id"`
+	NewID    int64  `json:"new_id"` // only for "replace"
+}
+
+// HandleModifyRoute modifies an existing route
+func (s *Server) HandleModifyRoute(w http.ResponseWriter, r *http.Request) {
+	var req ModifyRouteRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	q := dbgen.New(s.DB)
+	allSpots, err := q.GetAllSpots(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Build spot map
+	spotMap := make(map[int64]dbgen.Spot)
+	for _, sp := range allSpots {
+		spotMap[sp.ID] = sp
+	}
+
+	// Build new route
+	var stops []RouteStop
+	var totalDist float64
+	depMinutes := parseTimeToMinutes(req.DepartureTime)
+	currentTime := depMinutes
+
+	// Start point
+	stops = append(stops, RouteStop{
+		ID:          0,
+		Name:        "現在地",
+		Category:    "start",
+		Lat:         req.Lat,
+		Lng:         req.Lng,
+		ArrivalTime: minutesToTime(currentTime),
+	})
+
+	prevLat, prevLng := req.Lat, req.Lng
+
+	for _, stop := range req.CurrentRoute {
+		// Skip start/end
+		if stop.ID == 0 {
+			continue
+		}
+
+		// Handle skip action
+		if req.Action == "skip" && stop.ID == req.TargetID {
+			continue
+		}
+
+		// Handle replace action
+		spotID := stop.ID
+		if req.Action == "replace" && stop.ID == req.TargetID {
+			spotID = req.NewID
+		}
+
+		spot, ok := spotMap[spotID]
+		if !ok {
+			continue
+		}
+
+		dist := haversine(prevLat, prevLng, spot.Latitude, spot.Longitude)
+		totalDist += dist
+		travelMin := int(dist / 40 * 60)
+		currentTime += travelMin
+
+		desc := ""
+		if spot.Description != nil {
+			desc = *spot.Description
+		}
+
+		stayMin := stop.StayDuration
+		if stayMin == 0 {
+			stayMin = 30
+		}
+
+		stops = append(stops, RouteStop{
+			ID:               spot.ID,
+			Name:             spot.Name,
+			Description:      desc,
+			Category:         spot.Category,
+			Lat:              spot.Latitude,
+			Lng:              spot.Longitude,
+			DistanceFromPrev: math.Round(dist*10) / 10,
+			ArrivalTime:      minutesToTime(currentTime),
+			StayDuration:     stayMin,
+		})
+
+		currentTime += stayMin
+		prevLat, prevLng = spot.Latitude, spot.Longitude
+	}
+
+	// Return to start
+	returnDist := haversine(prevLat, prevLng, req.Lat, req.Lng)
+	totalDist += returnDist
+	returnTravelMin := int(returnDist / 40 * 60)
+	currentTime += returnTravelMin
+
+	stops = append(stops, RouteStop{
+		ID:               0,
+		Name:             "現在地",
+		Category:         "end",
+		Lat:              req.Lat,
+		Lng:              req.Lng,
+		DistanceFromPrev: math.Round(returnDist*10) / 10,
+		ArrivalTime:      minutesToTime(currentTime),
+	})
+
+	totalTimeMin := float64(currentTime - depMinutes)
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(RouteResponse{
+		Stops:           stops,
+		TotalDistanceKm: math.Round(totalDist*10) / 10,
+		TotalTimeMin:    math.Round(totalTimeMin),
+		DepartureTime:   req.DepartureTime,
+		EstimatedReturn: minutesToTime(currentTime),
+		Message:         "ルートを更新しました",
+	})
 }

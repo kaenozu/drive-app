@@ -5,6 +5,7 @@ let currentLocationMarker = null;
 let routeMarkers = [];
 let routeLine = null;
 let currentRoute = null;
+let editingStopIndex = null;
 
 const categoryIcons = {
     start: '📍',
@@ -133,6 +134,11 @@ function setupEventListeners() {
         document.getElementById('return-time').value = '';
         updateTimeHint();
     });
+    
+    // Spot edit modal
+    document.getElementById('cancel-edit').addEventListener('click', closeEditModal);
+    document.getElementById('skip-spot-btn').addEventListener('click', skipSpot);
+    document.getElementById('change-spot-btn').addEventListener('click', showAlternatives);
 }
 
 function updateTimeHint() {
@@ -267,15 +273,19 @@ function renderRoute() {
         const isLast = index === currentRoute.stops.length - 1;
         const icon = isFirst ? categoryIcons.start : (isLast ? categoryIcons.end : categoryIcons[stop.category]);
         const label = isFirst ? '出発' : (isLast ? '帰着' : categoryLabels[stop.category]);
+        const editable = !isFirst && !isLast;
         
         return `
-            <div class="timeline-item ${stop.category}">
+            <div class="timeline-item ${stop.category} ${editable ? 'editable' : ''}" 
+                 data-index="${index}" 
+                 ${editable ? `onclick="openEditModal(${index})"` : ''}>
                 <div class="timeline-icon">${icon}</div>
                 <div class="timeline-content">
                     <div class="timeline-header">
                         <span class="timeline-time">${stop.arrival_time || ''}</span>
                         <span class="timeline-label">${label}</span>
                         ${stop.distance_from_prev ? `<span class="timeline-distance">${stop.distance_from_prev.toFixed(1)}km</span>` : ''}
+                        ${editable ? '<span class="edit-hint">タップで編集</span>' : ''}
                     </div>
                     <div class="timeline-name">${escapeHtml(stop.name)}</div>
                     ${stop.description ? `<div class="timeline-desc">${escapeHtml(stop.description)}</div>` : ''}
@@ -387,4 +397,126 @@ function showNotification(message, isError = false) {
         notification.style.animation = 'slideUp 0.3s ease reverse';
         setTimeout(() => notification.remove(), 300);
     }, 3000);
+}
+
+// Route editing functions
+function openEditModal(index) {
+    if (!currentRoute || !currentRoute.stops[index]) return;
+    
+    editingStopIndex = index;
+    const stop = currentRoute.stops[index];
+    
+    document.getElementById('edit-spot-name').textContent = stop.name;
+    document.getElementById('alternative-spots').style.display = 'none';
+    document.getElementById('spot-edit-modal').style.display = 'flex';
+}
+
+function closeEditModal() {
+    document.getElementById('spot-edit-modal').style.display = 'none';
+    editingStopIndex = null;
+}
+
+async function skipSpot() {
+    if (editingStopIndex === null || !currentRoute) return;
+    
+    const skipId = currentRoute.stops[editingStopIndex].id;
+    closeEditModal();
+    
+    // Re-generate route excluding this spot
+    await modifyRoute('skip', skipId);
+}
+
+async function showAlternatives() {
+    if (editingStopIndex === null || !currentRoute) return;
+    
+    const stop = currentRoute.stops[editingStopIndex];
+    const listEl = document.getElementById('alternatives-list');
+    listEl.innerHTML = '<p>読み込み中...</p>';
+    document.getElementById('alternative-spots').style.display = 'block';
+    
+    try {
+        const response = await fetch('/api/alternatives', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lat: currentLocation.lat,
+                lng: currentLocation.lng,
+                category: stop.category,
+                exclude_id: stop.id,
+                current_route_ids: currentRoute.stops.map(s => s.id).filter(id => id > 0)
+            })
+        });
+        
+        if (!response.ok) throw new Error('API error');
+        
+        const alternatives = await response.json();
+        
+        if (alternatives.length === 0) {
+            listEl.innerHTML = '<p>代替候補が見つかりませんでした</p>';
+            return;
+        }
+        
+        listEl.innerHTML = alternatives.map(alt => `
+            <div class="alt-spot-item" onclick="selectAlternative(${alt.id})">
+                <div class="name">${categoryIcons[alt.category] || ''} ${escapeHtml(alt.name)}</div>
+                <div class="info">${alt.distance_km.toFixed(1)}km ・ ${alt.direction}</div>
+            </div>
+        `).join('');
+        
+    } catch (error) {
+        console.error('Get alternatives error:', error);
+        listEl.innerHTML = '<p>エラーが発生しました</p>';
+    }
+}
+
+async function selectAlternative(newSpotId) {
+    if (editingStopIndex === null || !currentRoute) return;
+    
+    const oldSpotId = currentRoute.stops[editingStopIndex].id;
+    closeEditModal();
+    
+    await modifyRoute('replace', oldSpotId, newSpotId);
+}
+
+async function modifyRoute(action, targetId, newId = null) {
+    const btn = document.getElementById('generate-route-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span> ルートを更新中...';
+    
+    try {
+        const response = await fetch('/api/route/modify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lat: currentLocation.lat,
+                lng: currentLocation.lng,
+                departure_time: document.getElementById('departure-time').value,
+                return_time: document.getElementById('return-time').value || null,
+                current_route: currentRoute.stops.map(s => ({
+                    id: s.id,
+                    category: s.category,
+                    stay_duration: s.stay_duration
+                })),
+                action: action,
+                target_id: targetId,
+                new_id: newId
+            })
+        });
+        
+        if (!response.ok) throw new Error('API error');
+        
+        const data = await response.json();
+        currentRoute = data;
+        
+        renderRoute();
+        renderRouteOnMap();
+        showNotification('ルートを更新しました');
+        
+    } catch (error) {
+        console.error('Modify route error:', error);
+        showNotification('ルートの更新に失敗しました', true);
+    } finally {
+        btn.disabled = false;
+        btn.innerHTML = '🗺️ ドライブルートを作成';
+    }
 }

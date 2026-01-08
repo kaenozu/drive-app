@@ -562,6 +562,12 @@ main {
     margin-top: 0.25rem;
 }
 
+.edit-hint {
+    font-size: 0.7rem;
+    color: #a0aec0;
+    margin-left: auto;
+}
+
 .timeline-name {
     font-size: 1.1rem;
     font-weight: 600;
@@ -601,6 +607,83 @@ main {
 
 .btn-success:hover:not(:disabled) {
     background: #38a169;
+}
+
+.btn-danger {
+    background: #e53e3e;
+    color: white;
+}
+
+.btn-danger:hover:not(:disabled) {
+    background: #c53030;
+}
+
+/* Route edit */
+.route-edit-hint {
+    font-size: 0.85rem;
+    color: #718096;
+    margin-bottom: 1rem;
+    text-align: center;
+}
+
+.timeline-item {
+    cursor: pointer;
+    transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.timeline-item:not(.start):not(.end):hover {
+    transform: translateX(5px);
+    box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+
+.timeline-item.editing {
+    border: 2px solid #667eea;
+}
+
+/* Edit modal */
+.edit-options {
+    display: flex;
+    gap: 1rem;
+    margin-bottom: 1rem;
+}
+
+.edit-options .btn {
+    flex: 1;
+}
+
+.alternative-spots {
+    margin-top: 1rem;
+    padding-top: 1rem;
+    border-top: 1px solid #e2e8f0;
+}
+
+.alternative-spots h4 {
+    font-size: 0.9rem;
+    color: #4a5568;
+    margin-bottom: 0.75rem;
+}
+
+.alt-spot-item {
+    padding: 0.75rem;
+    background: #f7fafc;
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+.alt-spot-item:hover {
+    background: #edf2f7;
+}
+
+.alt-spot-item .name {
+    font-weight: 600;
+    color: #2d3748;
+}
+
+.alt-spot-item .info {
+    font-size: 0.85rem;
+    color: #718096;
 }
 
 /* Map markers for route */

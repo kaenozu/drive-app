@@ -76,6 +76,7 @@
             <!-- Route Display -->
             <section id="route-section" class="card route-card" style="display:none;">
                 <h2>🛣️ 今日のドライブルート</h2>
+                <p class="route-edit-hint">各スポットをクリックして編集できます</p>
                 <div class="route-summary" id="route-summary"></div>
                 <div class="route-timeline" id="route-timeline"></div>
                 <div class="route-actions">
@@ -87,6 +88,28 @@
                     </button>
                 </div>
             </section>
+
+            <!-- Spot Edit Modal -->
+            <div id="spot-edit-modal" class="modal" style="display:none;">
+                <div class="modal-content">
+                    <h3>📝 <span id="edit-spot-name"></span></h3>
+                    <div class="edit-options">
+                        <button id="skip-spot-btn" class="btn btn-danger">
+                            ❌ このスポットをスキップ
+                        </button>
+                        <button id="change-spot-btn" class="btn btn-primary">
+                            🔄 別のスポットに変更
+                        </button>
+                    </div>
+                    <div id="alternative-spots" class="alternative-spots" style="display:none;">
+                        <h4>代替候補</h4>
+                        <div id="alternatives-list"></div>
+                    </div>
+                    <div class="modal-buttons">
+                        <button id="cancel-edit" class="btn btn-secondary">キャンセル</button>
+                    </div>
+                </div>
+            </div>
 
             <!-- Map -->
             <section class="card map-card">
