@@ -26,15 +26,9 @@
                     <button id="refresh-location" class="btn btn-primary">
                         🔄 位置を取得
                     </button>
-                    
-                    <div class="manual-location">
-                        <p class="section-label">手動で位置を設定:</p>
-                        <div class="location-inputs">
-                            <input type="number" id="manual-lat" step="any" placeholder="緯度 (35.6762)" value="35.6762">
-                            <input type="number" id="manual-lng" step="any" placeholder="経度 (139.6503)" value="139.6503">
-                        </div>
-                        <button id="set-location-btn" class="btn btn-secondary">位置を設定</button>
-                    </div>
+                    <input type="hidden" id="manual-lat" value="35.6762">
+                    <input type="hidden" id="manual-lng" value="139.6503">
+                    <p class="location-hint">地図をクリックして位置を設定できます</p>
                 </div>
 
                 <div class="search-section">

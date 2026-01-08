@@ -46,6 +46,10 @@ function initMap() {
             pickingLocation = false;
             map.getContainer().style.cursor = '';
             showNotification('位置を選択しました');
+        } else {
+            // Set current location by clicking map
+            setCurrentLocation(e.latlng.lat, e.latlng.lng);
+            showNotification('位置を設定しました');
         }
     });
 }
@@ -131,9 +135,9 @@ function setCurrentLocation(lat, lng) {
     currentLocation = { lat, lng };
     
     const locationEl = document.getElementById('current-location');
-    locationEl.textContent = `緯度: ${lat.toFixed(4)}, 経度: ${lng.toFixed(4)}`;
+    locationEl.textContent = '位置が設定されました';
     
-    // Update manual input fields
+    // Update hidden input fields
     document.getElementById('manual-lat').value = lat.toFixed(6);
     document.getElementById('manual-lng').value = lng.toFixed(6);
     
@@ -154,25 +158,11 @@ function setCurrentLocation(lat, lng) {
             .addTo(map)
             .bindPopup('<strong>現在地</strong>');
     }
-}
-
-// Set location manually
-function setLocationManually() {
-    const lat = parseFloat(document.getElementById('manual-lat').value);
-    const lng = parseFloat(document.getElementById('manual-lng').value);
     
-    if (isNaN(lat) || isNaN(lng)) {
-        showNotification('有効な緯度・経度を入力してください', true);
-        return;
+    // Recalculate distances if we have spots
+    if (spots.length > 0) {
+        loadSpots();
     }
-    
-    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
-        showNotification('緯度は-90〜90、経度は-180〜180の範囲で入力してください', true);
-        return;
-    }
-    
-    setCurrentLocation(lat, lng);
-    showNotification('位置を設定しました');
 }
 
 // Search nearby spots using Overpass API
@@ -194,81 +184,115 @@ async function searchNearbySpots() {
     const radius = parseInt(document.getElementById('search-radius').value) || 10000;
     const { lat, lng } = currentLocation;
     
-    // Split queries to avoid timeout
+    // Split queries to maximize results
     const queries = [
-        // Query 1: Drive spots (tourism & nature)
+        // Query 1: Tourism spots
         {
             name: '観光スポット',
-            query: `[out:json][timeout:30];
+            query: `[out:json][timeout:60];
                 (
-                    node["tourism"="viewpoint"](around:${radius},${lat},${lng});
-                    node["tourism"="attraction"](around:${radius},${lat},${lng});
-                    way["tourism"="attraction"](around:${radius},${lat},${lng});
-                    node["tourism"="museum"](around:${radius},${lat},${lng});
-                    way["tourism"="museum"](around:${radius},${lat},${lng});
-                    node["tourism"="theme_park"](around:${radius},${lat},${lng});
-                    way["tourism"="theme_park"](around:${radius},${lat},${lng});
-                    node["tourism"="zoo"](around:${radius},${lat},${lng});
-                    node["natural"="peak"]["name"](around:${radius},${lat},${lng});
+                    nwr["tourism"="viewpoint"](around:${radius},${lat},${lng});
+                    nwr["tourism"="attraction"](around:${radius},${lat},${lng});
+                    nwr["tourism"="museum"](around:${radius},${lat},${lng});
+                    nwr["tourism"="gallery"](around:${radius},${lat},${lng});
+                    nwr["tourism"="theme_park"](around:${radius},${lat},${lng});
+                    nwr["tourism"="zoo"](around:${radius},${lat},${lng});
+                    nwr["tourism"="aquarium"](around:${radius},${lat},${lng});
+                    nwr["tourism"="artwork"](around:${radius},${lat},${lng});
+                );
+                out center;`
+        },
+        // Query 2: Nature spots
+        {
+            name: '自然スポット',
+            query: `[out:json][timeout:60];
+                (
+                    node["natural"="peak"](around:${radius},${lat},${lng});
+                    node["natural"="volcano"](around:${radius},${lat},${lng});
                     node["natural"="waterfall"](around:${radius},${lat},${lng});
-                    node["natural"="beach"](around:${radius},${lat},${lng});
-                    way["natural"="beach"](around:${radius},${lat},${lng});
+                    nwr["natural"="beach"](around:${radius},${lat},${lng});
                     node["natural"="hot_spring"](around:${radius},${lat},${lng});
+                    node["natural"="cave_entrance"](around:${radius},${lat},${lng});
+                    node["natural"="spring"](around:${radius},${lat},${lng});
+                    nwr["leisure"="park"]["name"](around:${radius},${lat},${lng});
+                    nwr["leisure"="garden"](around:${radius},${lat},${lng});
+                    nwr["leisure"="nature_reserve"](around:${radius},${lat},${lng});
                 );
                 out center;`
         },
-        // Query 2: Historic & religious sites
+        // Query 3: Historic sites
         {
-            name: '寺社・史跡',
-            query: `[out:json][timeout:30];
+            name: '史跡',
+            query: `[out:json][timeout:60];
                 (
-                    node["historic"="castle"](around:${radius},${lat},${lng});
-                    way["historic"="castle"](around:${radius},${lat},${lng});
-                    node["historic"="monument"](around:${radius},${lat},${lng});
-                    node["historic"="ruins"](around:${radius},${lat},${lng});
-                    node["amenity"="place_of_worship"]["religion"="shinto"](around:${radius},${lat},${lng});
-                    way["amenity"="place_of_worship"]["religion"="shinto"](around:${radius},${lat},${lng});
-                    node["amenity"="place_of_worship"]["religion"="buddhist"](around:${radius},${lat},${lng});
-                    way["amenity"="place_of_worship"]["religion"="buddhist"](around:${radius},${lat},${lng});
+                    nwr["historic"](around:${radius},${lat},${lng});
                 );
                 out center;`
         },
-        // Query 3: Parks (limited)
+        // Query 4: Temples & Shrines
         {
-            name: '公園',
-            query: `[out:json][timeout:45];
+            name: '寺社仏閣',
+            query: `[out:json][timeout:60];
                 (
-                    node["leisure"="park"]["name"](around:${radius},${lat},${lng});
+                    nwr["amenity"="place_of_worship"](around:${radius},${lat},${lng});
                 );
                 out center;`
         },
-        // Query 4: Restaurants (name required to limit results)
+        // Query 5: Restaurants
         {
-            name: '飲食店',
-            query: `[out:json][timeout:45];
+            name: 'レストラン',
+            query: `[out:json][timeout:60];
                 (
-                    node["amenity"="restaurant"]["name"](around:${radius},${lat},${lng});
-                    node["amenity"="cafe"]["name"](around:${radius},${lat},${lng});
-                    node["amenity"="fast_food"]["name"](around:${radius},${lat},${lng});
+                    node["amenity"="restaurant"](around:${radius},${lat},${lng});
+                    way["amenity"="restaurant"](around:${radius},${lat},${lng});
                 );
                 out center;`
         },
-        // Query 5: Rest spots
+        // Query 6: Cafes & others
         {
-            name: '休憩スポット',
-            query: `[out:json][timeout:30];
+            name: 'カフェ・飲食',
+            query: `[out:json][timeout:60];
                 (
-                    node["highway"="rest_area"](around:${radius},${lat},${lng});
-                    way["highway"="rest_area"](around:${radius},${lat},${lng});
-                    node["highway"="services"](around:${radius},${lat},${lng});
-                    way["highway"="services"](around:${radius},${lat},${lng});
-                    node["amenity"="parking"]["name"](around:${radius},${lat},${lng});
-                    node["amenity"="fuel"]["name"](around:${radius},${lat},${lng});
+                    node["amenity"="cafe"](around:${radius},${lat},${lng});
+                    node["amenity"="fast_food"](around:${radius},${lat},${lng});
+                    node["amenity"="bar"](around:${radius},${lat},${lng});
+                    node["amenity"="pub"](around:${radius},${lat},${lng});
+                    node["amenity"="ice_cream"](around:${radius},${lat},${lng});
+                    node["shop"="bakery"](around:${radius},${lat},${lng});
+                );
+                out center;`
+        },
+        // Query 7: Rest areas & services
+        {
+            name: 'SA/PA/道の駅',
+            query: `[out:json][timeout:60];
+                (
+                    nwr["highway"="rest_area"](around:${radius},${lat},${lng});
+                    nwr["highway"="services"](around:${radius},${lat},${lng});
                     node["amenity"="public_bath"](around:${radius},${lat},${lng});
-                    node["leisure"="hot_spring"](around:${radius},${lat},${lng});
-                    node["shop"="convenience"]["name"](around:${radius},${lat},${lng});
-                    node["tourism"="camp_site"](around:${radius},${lat},${lng});
-                    way["tourism"="camp_site"](around:${radius},${lat},${lng});
+                    nwr["leisure"="hot_spring"](around:${radius},${lat},${lng});
+                    nwr["tourism"="camp_site"](around:${radius},${lat},${lng});
+                    nwr["tourism"="caravan_site"](around:${radius},${lat},${lng});
+                    nwr["tourism"="picnic_site"](around:${radius},${lat},${lng});
+                );
+                out center;`
+        },
+        // Query 8: Gas stations & convenience stores
+        {
+            name: 'ガソリン/コンビニ',
+            query: `[out:json][timeout:60];
+                (
+                    node["amenity"="fuel"](around:${radius},${lat},${lng});
+                    node["shop"="convenience"](around:${radius},${lat},${lng});
+                );
+                out center;`
+        },
+        // Query 9: Parking
+        {
+            name: '駐車場',
+            query: `[out:json][timeout:60];
+                (
+                    nwr["amenity"="parking"]["name"](around:${radius},${lat},${lng});
                 );
                 out center;`
         }
@@ -277,9 +301,10 @@ async function searchNearbySpots() {
     let totalAdded = 0;
     
     try {
+        const totalQueries = queries.length;
         for (let i = 0; i < queries.length; i++) {
             const q = queries[i];
-            btn.textContent = `🔍 ${q.name}を検索中... (${i+1}/${queries.length})`;
+            btn.textContent = `🔍 ${q.name}を検索中... (${i+1}/${totalQueries})`;
         
             try {
                 // Try multiple Overpass API servers
@@ -655,9 +680,6 @@ async function clearAllSpots() {
 function setupEventListeners() {
     // Refresh location button
     document.getElementById('refresh-location').addEventListener('click', getCurrentLocation);
-    
-    // Manual location set
-    document.getElementById('set-location-btn').addEventListener('click', setLocationManually);
     
     // Search spots button
     document.getElementById('search-spots-btn').addEventListener('click', searchNearbySpots);

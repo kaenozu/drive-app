@@ -322,36 +322,10 @@ body {
     margin-top: 5px;
 }
 
-/* Manual location input */
-.manual-location {
-    margin-top: 15px;
-    padding-top: 15px;
-    border-top: 1px solid #eee;
-}
-
-.section-label {
-    font-size: 0.85rem;
-    color: #666;
-    margin-bottom: 8px;
-}
-
-.location-inputs {
-    display: flex;
-    gap: 8px;
-    margin-bottom: 8px;
-}
-
-.location-inputs input {
-    flex: 1;
-    padding: 8px;
-    border: 2px solid #e0e0e0;
-    border-radius: 6px;
-    font-size: 0.9rem;
-}
-
-.location-inputs input:focus {
-    outline: none;
-    border-color: #667eea;
+.location-hint {
+    font-size: 0.8rem;
+    color: #888;
+    margin-top: 10px;
 }
 
 /* Search section */
