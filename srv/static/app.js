@@ -190,85 +190,179 @@ async function searchNearbySpots() {
     isSearching = true;
     const btn = document.getElementById('search-spots-btn');
     btn.disabled = true;
-    btn.textContent = '🔍 検索中...';
     
     const radius = parseInt(document.getElementById('search-radius').value) || 10000;
     const { lat, lng } = currentLocation;
     
-    try {
-        // Overpass API query for various POIs
-        const query = `
-            [out:json][timeout:25];
-            (
-                // Scenic viewpoints and tourist attractions
-                node["tourism"="viewpoint"](around:${radius},${lat},${lng});
-                node["tourism"="attraction"](around:${radius},${lat},${lng});
-                way["tourism"="attraction"](around:${radius},${lat},${lng});
-                
-                // Restaurants
-                node["amenity"="restaurant"](around:${radius},${lat},${lng});
-                node["amenity"="cafe"](around:${radius},${lat},${lng});
-                
-                // Rest areas and parking
-                node["highway"="rest_area"](around:${radius},${lat},${lng});
-                node["highway"="services"](around:${radius},${lat},${lng});
-                node["amenity"="parking"]["name"](around:${radius},${lat},${lng});
-                
-                // Hot springs (onsen)
-                node["amenity"="public_bath"](around:${radius},${lat},${lng});
-                node["leisure"="hot_spring"](around:${radius},${lat},${lng});
-            );
-            out body;
-            >;
-            out skel qt;
-        `;
-        
-        const response = await fetch('https://overpass-api.de/api/interpreter', {
-            method: 'POST',
-            body: query
-        });
-        
-        if (!response.ok) {
-            throw new Error('Overpass API error');
+    // Split queries to avoid timeout
+    const queries = [
+        // Query 1: Drive spots (tourism & nature)
+        {
+            name: '観光スポット',
+            query: `[out:json][timeout:30];
+                (
+                    node["tourism"="viewpoint"](around:${radius},${lat},${lng});
+                    node["tourism"="attraction"](around:${radius},${lat},${lng});
+                    way["tourism"="attraction"](around:${radius},${lat},${lng});
+                    node["tourism"="museum"](around:${radius},${lat},${lng});
+                    way["tourism"="museum"](around:${radius},${lat},${lng});
+                    node["tourism"="theme_park"](around:${radius},${lat},${lng});
+                    way["tourism"="theme_park"](around:${radius},${lat},${lng});
+                    node["tourism"="zoo"](around:${radius},${lat},${lng});
+                    node["natural"="peak"]["name"](around:${radius},${lat},${lng});
+                    node["natural"="waterfall"](around:${radius},${lat},${lng});
+                    node["natural"="beach"](around:${radius},${lat},${lng});
+                    way["natural"="beach"](around:${radius},${lat},${lng});
+                    node["natural"="hot_spring"](around:${radius},${lat},${lng});
+                );
+                out center;`
+        },
+        // Query 2: Historic & religious sites
+        {
+            name: '寺社・史跡',
+            query: `[out:json][timeout:30];
+                (
+                    node["historic"="castle"](around:${radius},${lat},${lng});
+                    way["historic"="castle"](around:${radius},${lat},${lng});
+                    node["historic"="monument"](around:${radius},${lat},${lng});
+                    node["historic"="ruins"](around:${radius},${lat},${lng});
+                    node["amenity"="place_of_worship"]["religion"="shinto"](around:${radius},${lat},${lng});
+                    way["amenity"="place_of_worship"]["religion"="shinto"](around:${radius},${lat},${lng});
+                    node["amenity"="place_of_worship"]["religion"="buddhist"](around:${radius},${lat},${lng});
+                    way["amenity"="place_of_worship"]["religion"="buddhist"](around:${radius},${lat},${lng});
+                );
+                out center;`
+        },
+        // Query 3: Parks (limited)
+        {
+            name: '公園',
+            query: `[out:json][timeout:45];
+                (
+                    node["leisure"="park"]["name"](around:${radius},${lat},${lng});
+                );
+                out center;`
+        },
+        // Query 4: Restaurants (name required to limit results)
+        {
+            name: '飲食店',
+            query: `[out:json][timeout:45];
+                (
+                    node["amenity"="restaurant"]["name"](around:${radius},${lat},${lng});
+                    node["amenity"="cafe"]["name"](around:${radius},${lat},${lng});
+                    node["amenity"="fast_food"]["name"](around:${radius},${lat},${lng});
+                );
+                out center;`
+        },
+        // Query 5: Rest spots
+        {
+            name: '休憩スポット',
+            query: `[out:json][timeout:30];
+                (
+                    node["highway"="rest_area"](around:${radius},${lat},${lng});
+                    way["highway"="rest_area"](around:${radius},${lat},${lng});
+                    node["highway"="services"](around:${radius},${lat},${lng});
+                    way["highway"="services"](around:${radius},${lat},${lng});
+                    node["amenity"="parking"]["name"](around:${radius},${lat},${lng});
+                    node["amenity"="fuel"]["name"](around:${radius},${lat},${lng});
+                    node["amenity"="public_bath"](around:${radius},${lat},${lng});
+                    node["leisure"="hot_spring"](around:${radius},${lat},${lng});
+                    node["shop"="convenience"]["name"](around:${radius},${lat},${lng});
+                    node["tourism"="camp_site"](around:${radius},${lat},${lng});
+                    way["tourism"="camp_site"](around:${radius},${lat},${lng});
+                );
+                out center;`
         }
+    ];
+    
+    let totalAdded = 0;
+    
+    try {
+        for (let i = 0; i < queries.length; i++) {
+            const q = queries[i];
+            btn.textContent = `🔍 ${q.name}を検索中... (${i+1}/${queries.length})`;
         
-        const data = await response.json();
-        
-        // Process and save spots
-        let addedCount = 0;
-        for (const element of data.elements) {
-            if (!element.tags || !element.tags.name) continue;
-            if (!element.lat || !element.lon) continue;
-            
-            const category = categorizeOSMElement(element);
-            const description = buildDescription(element);
-            
-            const spotData = {
-                name: element.tags.name,
-                category: category,
-                description: description,
-                latitude: element.lat,
-                longitude: element.lon,
-                address: element.tags['addr:full'] || element.tags['addr:street'] || '',
-                rating: 0
-            };
-            
             try {
-                const saveResponse = await fetch('/api/spots', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(spotData)
-                });
+                // Try multiple Overpass API servers
+                const servers = [
+                    'https://overpass-api.de/api/interpreter',
+                    'https://overpass.kumi.systems/api/interpreter',
+                    'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
+                ];
                 
-                if (saveResponse.ok) {
-                    addedCount++;
+                let response = null;
+                for (const server of servers) {
+                    try {
+                        response = await fetch(server, {
+                            method: 'POST',
+                            body: q.query
+                        });
+                        if (response.ok) break;
+                    } catch (e) {
+                        console.log(`Server ${server} failed, trying next...`);
+                    }
+                }
+                
+                if (!response) {
+                    console.error(`All servers failed for ${q.name}`);
+                    continue;
+                }
+                
+                if (!response.ok) {
+                    console.error(`Query ${q.name} failed:`, response.status);
+                    continue;
+                }
+                
+                const data = await response.json();
+                
+                // Process and save spots
+                for (const element of data.elements) {
+                    if (!element.tags || !element.tags.name) continue;
+                    
+                    // Get coordinates (node has lat/lon, way/relation has center)
+                    let elLat = element.lat;
+                    let elLon = element.lon;
+                    if (!elLat && element.center) {
+                        elLat = element.center.lat;
+                        elLon = element.center.lon;
+                    }
+                    if (!elLat || !elLon) continue;
+                    
+                    const category = categorizeOSMElement(element);
+                    const description = buildDescription(element);
+                    
+                    const spotData = {
+                        name: element.tags.name,
+                        category: category,
+                        description: description,
+                        latitude: elLat,
+                        longitude: elLon,
+                        address: element.tags['addr:full'] || element.tags['addr:street'] || element.tags['addr:city'] || '',
+                        rating: 0
+                    };
+                    
+                    try {
+                        const saveResponse = await fetch('/api/spots', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(spotData)
+                        });
+                        
+                        if (saveResponse.ok) {
+                            totalAdded++;
+                        }
+                    } catch (e) {
+                        // Ignore individual save errors
+                    }
                 }
             } catch (e) {
-                console.error('Error saving spot:', e);
+                console.error(`Query ${q.name} error:`, e);
             }
+            
+            // Small delay between queries to be nice to the API
+            await new Promise(r => setTimeout(r, 500));
         }
         
-        showNotification(`${addedCount}件のスポットを追加しました`);
+        showNotification(`${totalAdded}件のスポットを追加しました`);
         loadSpots();
         
     } catch (error) {
@@ -285,18 +379,27 @@ async function searchNearbySpots() {
 function categorizeOSMElement(element) {
     const tags = element.tags;
     
-    if (tags.tourism === 'viewpoint' || tags.tourism === 'attraction') {
-        return 'drive';
-    }
-    if (tags.amenity === 'restaurant' || tags.amenity === 'cafe') {
+    // Restaurant category
+    if (tags.amenity === 'restaurant' || tags.amenity === 'cafe' ||
+        tags.amenity === 'fast_food' || tags.amenity === 'food_court' ||
+        tags.amenity === 'ice_cream' || tags.amenity === 'pub' ||
+        tags.amenity === 'bar' || tags.shop === 'bakery') {
         return 'restaurant';
     }
-    if (tags.highway === 'rest_area' || tags.highway === 'services' || 
+    
+    // Rest category
+    if (tags.highway === 'rest_area' || tags.highway === 'services' ||
         tags.amenity === 'parking' || tags.amenity === 'public_bath' ||
-        tags.leisure === 'hot_spring') {
+        tags.leisure === 'hot_spring' || tags.natural === 'hot_spring' ||
+        tags.amenity === 'fuel' || tags.shop === 'convenience' ||
+        tags.amenity === 'toilets' || tags.amenity === 'marketplace' ||
+        tags.tourism === 'camp_site' || tags.tourism === 'caravan_site' ||
+        tags.tourism === 'picnic_site' || tags.leisure === 'picnic_table' ||
+        tags.shop === 'massage') {
         return 'rest';
     }
     
+    // Everything else is a drive spot (tourism, nature, historic, etc.)
     return 'drive';
 }
 
@@ -305,20 +408,83 @@ function buildDescription(element) {
     const tags = element.tags;
     const parts = [];
     
-    if (tags.tourism === 'viewpoint') parts.push('展望スポット');
-    if (tags.tourism === 'attraction') parts.push('観光スポット');
-    if (tags.amenity === 'restaurant') parts.push('レストラン');
-    if (tags.amenity === 'cafe') parts.push('カフェ');
-    if (tags.highway === 'rest_area') parts.push('休憩エリア');
-    if (tags.highway === 'services') parts.push('サービスエリア');
-    if (tags.amenity === 'public_bath') parts.push('温泉・銭湯');
-    if (tags.leisure === 'hot_spring') parts.push('温泉');
+    // Type descriptions
+    const typeMap = {
+        'tourism=viewpoint': '展望スポット',
+        'tourism=attraction': '観光スポット',
+        'tourism=museum': '博物館・美術館',
+        'tourism=gallery': 'ギャラリー',
+        'tourism=theme_park': 'テーマパーク',
+        'tourism=zoo': '動物園',
+        'tourism=camp_site': 'キャンプ場',
+        'tourism=caravan_site': 'オートキャンプ場',
+        'tourism=picnic_site': 'ピクニックサイト',
+        'amenity=restaurant': 'レストラン',
+        'amenity=cafe': 'カフェ',
+        'amenity=fast_food': 'ファストフード',
+        'amenity=pub': 'パブ',
+        'amenity=bar': 'バー',
+        'amenity=ice_cream': 'アイスクリーム',
+        'amenity=public_bath': '温泉・銭湯',
+        'amenity=fuel': 'ガソリンスタンド',
+        'amenity=parking': '駐車場',
+        'amenity=marketplace': '道の駅・物産店',
+        'amenity=place_of_worship': '寺社仏閣',
+        'highway=rest_area': '休憩エリア',
+        'highway=services': 'SA・サービスエリア',
+        'highway=viewpoint': '展望スポット',
+        'leisure=hot_spring': '温泉',
+        'leisure=park': '公園',
+        'leisure=nature_reserve': '自然保護区',
+        'leisure=water_park': 'ウォーターパーク',
+        'natural=peak': '山頂',
+        'natural=volcano': '火山',
+        'natural=waterfall': '滝',
+        'natural=hot_spring': '温泉',
+        'natural=beach': 'ビーチ',
+        'natural=cave_entrance': '洞窟',
+        'historic=castle': '城',
+        'historic=monument': '記念碑',
+        'historic=ruins': '遺跡',
+        'historic=memorial': '記念碑',
+        'shop=bakery': 'パン屋',
+        'shop=convenience': 'コンビニ',
+    };
     
-    if (tags.cuisine) parts.push(tags.cuisine);
-    if (tags.description) parts.push(tags.description);
+    // Find matching type
+    for (const [key, label] of Object.entries(typeMap)) {
+        const [k, v] = key.split('=');
+        if (tags[k] === v) {
+            parts.push(label);
+            break;
+        }
+    }
+    
+    // Additional info
+    if (tags.cuisine) {
+        const cuisineMap = {
+            'japanese': '和食', 'sushi': '寿司', 'ramen': 'ラーメン',
+            'italian': 'イタリアン', 'chinese': '中華', 'french': 'フレンチ',
+            'korean': '韓国料理', 'indian': 'インド料理', 'thai': 'タイ料理',
+            'burger': 'ハンバーガー', 'pizza': 'ピザ', 'seafood': '海鮮',
+            'noodle': '麺類', 'curry': 'カレー', 'coffee': 'コーヒー'
+        };
+        const cuisine = tags.cuisine.split(';')[0];
+        parts.push(cuisineMap[cuisine] || cuisine);
+    }
+    
+    if (tags.religion) {
+        const religionMap = { 'shinto': '神社', 'buddhist': '寺院', 'christian': '教会' };
+        parts.push(religionMap[tags.religion] || '');
+    }
+    
+    if (tags.ele) parts.push(`標高${tags.ele}m`);
     if (tags.opening_hours) parts.push(`営業: ${tags.opening_hours}`);
+    if (tags.phone) parts.push(`℡${tags.phone}`);
+    if (tags.website) parts.push('🌐 Webあり');
+    if (tags.description) parts.push(tags.description);
     
-    return parts.join(' / ');
+    return parts.filter(p => p).join(' / ');
 }
 
 // Load all spots
