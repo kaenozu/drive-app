@@ -383,6 +383,7 @@ func callClaudeAPI(prompt string) ([]int64, string) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, _ := http.NewRequest("POST", "http://169.254.169.254/gateway/llm/_/gateway/anthropic/v1/messages", bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -685,36 +686,59 @@ func (s *Server) buildRouteWithAI(startLat, startLng float64, driveSpots, restau
 		avoidList = "\n※最近提案したルートと同じ組み合わせは避けてください。\n"
 	}
 
+	// Calculate recommended number of stops based on available time
+	numDriveSpots := 1
+	includeMeal := false
+	includeRest := false
+	if availableHours >= 3 {
+		numDriveSpots = 2
+		includeMeal = len(restaurants) > 0
+	}
+	if availableHours >= 5 {
+		numDriveSpots = 2
+		includeRest = len(restSpots) > 0
+	}
+	if availableHours >= 7 {
+		numDriveSpots = 3
+	}
+
 	prompt := fmt.Sprintf(`あなたはドライブルートのプランナーAIです。
-現在地から出発して、いくつかのスポットを経由して現在地に戻る周遊ドライブルートを作成してください。
+現在地から出発して、複数のスポットを経由して現在地に戻る充実した周遊ドライブルートを作成してください。
 
 【基本情報】
 現在地: 緯度%.4f, 経度%.4f
 出発時刻: %s
 使える時間: 約%.1f時間
-ランダムシード: %d（毎回異なるルートを提案するため）
+ランダムシード: %d
 %s
 【候補スポット】
 %s
-【要件】
-1. メインの目的地（ドライブスポット）を1〜3箇所選ぶ
-2. 食事スポットがあれば、昼食時間帯（11:30-13:30頃）に1箇所組み込む
-3. 休憩スポットがあれば適宜組み込む（長距離の場合）
-4. 効率的で無駄のないルート順序にする
+【重要な要件】
+1. ドライブスポットを **%d箇所以上** 必ず選ぶ（メインの目的地）
+2. 食事スポットを **%s** （昼食時間帯11:30-13:30頃に配置）
+3. 休憩・カフェスポットを **%s**
+4. 効率的なルート順序にする（周回ルート、無駄な往復をしない）
 5. 出発地と帰着地は同じ（現在地）
-6. 各スポットの滞在時間目安: ドライブスポット30-60分、食事45-60分、休憩15-30分
-7. **前回と違うルートを提案してください**
+6. 各スポットの滞在時間目安:
+   - ドライブスポット: 30-45分
+   - 食事: 50-60分
+   - 休憩/カフェ: 20-30分
+7. **必ず複数スポットを含む充実したルートにすること**
 
 【出力形式】JSON形式で回答:
 {
-  "route_ids": [スポットIDを訪問順に配列。出発地・帰着地は含めない],
-  "stay_durations": [各スポットの滞在時間（分）を対応する順番で配列],
-  "message": "このルートの特徴や楽しみ方を2文程度で"
+  "route_ids": [訪問順のスポットID配列。3箇所以上を推奨],
+  "stay_durations": [各スポットの滞在時間（分）],
+  "message": "このルートの見どころを2文で"
 }
-`, startLat, startLng, req.DepartureTime, availableHours, randomSeed, avoidList, candidateList)
+`, startLat, startLng, req.DepartureTime, availableHours, randomSeed, avoidList, candidateList,
+		numDriveSpots,
+		map[bool]string{true: "1箇所必ず含める", false: "含めない（候補なし）"}[includeMeal],
+		map[bool]string{true: "1箇所含める", false: "含めない（候補なし）"}[includeRest])
 
 	// Call Claude API
 	routeIDs, stayDurations, message := callClaudeAPIForRouteV2(prompt)
+	slog.Info("AI route response", "routeIDs", routeIDs, "stayDurations", stayDurations, "message", message)
 
 	// Build spot map
 	spotMap := make(map[int64]dbgen.Spot)
@@ -861,6 +885,7 @@ func callClaudeAPIForRouteV2(prompt string) ([]int64, []int, string) {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, _ := http.NewRequest("POST", "http://169.254.169.254/gateway/llm/_/gateway/anthropic/v1/messages", bytes.NewBuffer(jsonBody))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
 
 	resp, err := client.Do(req)
 	if err != nil {
@@ -882,10 +907,12 @@ func callClaudeAPIForRouteV2(prompt string) ([]int64, []int, string) {
 	}
 
 	if len(result.Content) == 0 {
+		slog.Error("No content in Claude response", "body", string(body))
 		return nil, nil, ""
 	}
 
 	text := result.Content[0].Text
+	slog.Info("Claude raw response", "text", text)
 
 	// Find JSON in response
 	start := -1
